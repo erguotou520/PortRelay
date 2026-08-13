@@ -33,7 +33,7 @@ struct KubernetesWorkspaceView: View {
                     ContentUnavailableView(
                         "选择 Namespace",
                         systemImage: "arrow.left",
-                        description: Text("右侧将显示 Service 和 Deployment 暴露的端口。")
+                        description: Text("右侧将显示 Service、Deployment 和 Pod 声明的端口。")
                     )
                 }
             }
@@ -333,7 +333,7 @@ private struct KubernetesPortsView: View {
             let matchesSearch = query.isEmpty
                 || item.port.resourceName.localizedCaseInsensitiveContains(query)
                 || item.port.kind.title.localizedCaseInsensitiveContains(query)
-                || String(item.port.remotePort).contains(query)
+                || (item.port.remotePort.map { String($0).contains(query) } == true)
                 || (item.port.portName?.localizedCaseInsensitiveContains(query) == true)
                 || (item.mapping?.localHost.localizedCaseInsensitiveContains(query) == true)
                 || (item.mapping.map { String($0.localPort).contains(query) } == true)
@@ -351,7 +351,7 @@ private struct KubernetesPortsView: View {
             if isLoading {
                 VStack(spacing: 10) {
                     ProgressView()
-                    Text("正在读取 Service 和 Deployment…").font(.caption).foregroundStyle(.secondary)
+                    Text("正在读取 Service、Deployment 和 Pod…").font(.caption).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let loadError, items.isEmpty {
@@ -365,12 +365,12 @@ private struct KubernetesPortsView: View {
             } else if items.isEmpty {
                 ContentUnavailableView(
                     searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? "没有可转发端口"
+                        ? emptyTitle
                         : "没有匹配的端口",
                     systemImage: "point.3.connected.trianglepath.dotted",
                     description: Text(
                         searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? "此 Namespace 的 Service 和 Deployment 没有声明端口。"
+                            ? emptyDescription
                             : "尝试搜索其他资源名称、Host 或端口。"
                     )
                 )
@@ -390,6 +390,7 @@ private struct KubernetesPortsView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .sheet(item: $editingItem) { item in
             KubernetesMappingEditorView(
                 clusterID: cluster.id,
@@ -401,7 +402,7 @@ private struct KubernetesPortsView: View {
         }
         .sheet(item: $podRequest) { request in
             KubernetesPodChooser(request: request) { pod in
-                openSession(request.action, deployment: request.deployment, pod: pod)
+                openSession(request.action, sourceName: request.deployment, pod: pod)
             }
         }
         .confirmationDialog(
@@ -427,22 +428,12 @@ private struct KubernetesPortsView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: "square.stack.3d.up.fill")
-                .foregroundStyle(.purple)
-                .frame(width: 34, height: 34)
-                .background(.purple.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(namespace).font(.headline)
-                Text("\(cluster.name) · \(cluster.contextName)")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
             Picker("资源类型", selection: $filter) {
                 ForEach(KubernetesPortFilter.allCases) { item in Text(item.title).tag(item) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(width: 250)
+            .frame(width: 330)
             TextField("搜索资源或端口", text: $searchText)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 170)
@@ -452,6 +443,7 @@ private struct KubernetesPortsView: View {
                 Label("刷新", systemImage: "arrow.clockwise")
             }
             .disabled(isLoading)
+            Spacer()
             Text("\(runningCount) 个运行中")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(runningCount > 0 ? .green : .secondary)
@@ -483,8 +475,10 @@ private struct KubernetesPortsView: View {
                     manager: manager,
                     action: { performPrimaryAction(item) },
                     viewLogs: item.port.kind == .deployment
-                        ? { prepareSession(.logs, deployment: item.port.resourceName) }
-                        : nil
+                        ? { prepareDeploymentSession(.logs, deployment: item.port.resourceName) }
+                        : item.port.kind == .pod
+                            ? { openPodSession(.logs, port: item.port) }
+                            : nil
                 )
                 .tag(item.id)
                 .contextMenu {
@@ -502,12 +496,20 @@ private struct KubernetesPortsView: View {
     private func contextMenu(for item: KubernetesPortListItem) -> some View {
         if item.port.kind == .deployment {
             Button("查看日志", systemImage: "doc.text.magnifyingglass") {
-                prepareSession(.logs, deployment: item.port.resourceName)
+                prepareDeploymentSession(.logs, deployment: item.port.resourceName)
             }
             Button("Shell 连接", systemImage: "terminal") {
-                prepareSession(.shell, deployment: item.port.resourceName)
+                prepareDeploymentSession(.shell, deployment: item.port.resourceName)
             }
             .disabled(loadingDeploymentName != nil)
+            Divider()
+        } else if item.port.kind == .pod {
+            Button("查看日志", systemImage: "doc.text.magnifyingglass") {
+                openPodSession(.logs, port: item.port)
+            }
+            Button("Shell 连接", systemImage: "terminal") {
+                openPodSession(.shell, port: item.port)
+            }
             Divider()
         }
         if let mapping = item.mapping {
@@ -549,6 +551,24 @@ private struct KubernetesPortsView: View {
         }.count
     }
 
+    private var emptyTitle: String {
+        switch filter {
+        case .all: "没有资源"
+        case .services: "没有 Service"
+        case .deployments: "没有 Deployment"
+        case .pods: "没有 Pod"
+        }
+    }
+
+    private var emptyDescription: String {
+        switch filter {
+        case .all: "此 Namespace 没有 Service、Deployment 或 Pod。"
+        case .services: "此 Namespace 没有 Service。"
+        case .deployments: "此 Namespace 没有 Deployment。"
+        case .pods: "此 Namespace 没有 Pod。"
+        }
+    }
+
     private func performPrimaryAction(_ item: KubernetesPortListItem) {
         guard let mapping = item.mapping else {
             editingItem = item
@@ -561,7 +581,7 @@ private struct KubernetesPortsView: View {
         }
     }
 
-    private func prepareSession(_ action: KubernetesSessionAction, deployment: String) {
+    private func prepareDeploymentSession(_ action: KubernetesSessionAction, deployment: String) {
         loadingDeploymentName = deployment
         Task {
             defer { loadingDeploymentName = nil }
@@ -579,7 +599,7 @@ private struct KubernetesPortsView: View {
                     return
                 }
                 if runningPods.count == 1, let pod = runningPods.first {
-                    openSession(action, deployment: deployment, pod: pod)
+                    openSession(action, sourceName: deployment, pod: pod)
                 } else {
                     podRequest = KubernetesPodRequest(
                         deployment: deployment,
@@ -593,9 +613,14 @@ private struct KubernetesPortsView: View {
         }
     }
 
+    private func openPodSession(_ action: KubernetesSessionAction, port: KubernetesPort) {
+        let pod = KubernetesPod(name: port.resourceName, phase: port.podPhase ?? "Unknown")
+        openSession(action, sourceName: port.resourceName, pod: pod)
+    }
+
     private func openSession(
         _ action: KubernetesSessionAction,
-        deployment: String,
+        sourceName: String,
         pod: KubernetesPod
     ) {
         switch action {
@@ -603,14 +628,14 @@ private struct KubernetesPortsView: View {
             store.sessionManager.openKubernetesLogs(
                 cluster: cluster,
                 namespace: namespace,
-                deployment: deployment,
+                sourceName: sourceName,
                 pod: pod
             )
         case .shell:
             store.sessionManager.openKubernetesShell(
                 cluster: cluster,
                 namespace: namespace,
-                deployment: deployment,
+                sourceName: sourceName,
                 pod: pod
             )
         }
@@ -702,6 +727,7 @@ private enum KubernetesPortFilter: String, CaseIterable, Identifiable {
     case all
     case services
     case deployments
+    case pods
 
     var id: String { rawValue }
     var title: String {
@@ -709,6 +735,7 @@ private enum KubernetesPortFilter: String, CaseIterable, Identifiable {
         case .all: "全部"
         case .services: "Service"
         case .deployments: "Deployment"
+        case .pods: "Pod"
         }
     }
     var kind: KubernetesResourceKind? {
@@ -716,6 +743,7 @@ private enum KubernetesPortFilter: String, CaseIterable, Identifiable {
         case .all: nil
         case .services: .service
         case .deployments: .deployment
+        case .pods: .pod
         }
     }
 }
@@ -741,7 +769,7 @@ private struct KubernetesPortRow: View {
                                 .font(.caption)
                         }
                         .buttonStyle(.borderless)
-                        .help("查看 Deployment 日志")
+                        .help("查看 \(item.port.kind.title) 日志")
                     }
                 }
                 Text(item.port.kind.title)
@@ -750,6 +778,11 @@ private struct KubernetesPortRow: View {
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(item.port.kind == .service ? .blue.opacity(0.12) : .purple.opacity(0.12), in: Capsule())
+                if item.port.kind == .pod, let phase = item.port.podPhase {
+                    Text(phase)
+                        .font(.caption2)
+                        .foregroundStyle(phase == "Running" ? .green : .secondary)
+                }
                 if case .failed(let message) = status {
                     Text(message).font(.caption2).foregroundStyle(.red).lineLimit(1).help(message)
                 }
@@ -757,7 +790,9 @@ private struct KubernetesPortRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(String(item.port.remotePort)).font(.system(.body, design: .monospaced))
+                Text(item.port.remotePort.map(String.init) ?? "未声明")
+                    .font(item.port.remotePort == nil ? .caption : .system(.body, design: .monospaced))
+                    .foregroundStyle(item.port.remotePort == nil ? .secondary : .primary)
                 if let name = item.port.portName, !name.isEmpty {
                     Text(name).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 }

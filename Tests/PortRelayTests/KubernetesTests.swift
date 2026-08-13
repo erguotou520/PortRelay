@@ -61,7 +61,7 @@ final class KubernetesTests: XCTestCase {
         ])
     }
 
-    func testParsesServiceAndDeploymentPorts() throws {
+    func testParsesServiceDeploymentAndPodPorts() throws {
         let json = """
         {
           "items": [
@@ -86,6 +86,19 @@ final class KubernetesTests: XCTestCase {
                   }
                 }
               }
+            },
+            {
+              "kind": "Pod",
+              "metadata": {"name": "worker-abc"},
+              "spec": {
+                "containers": [
+                  {"ports": [
+                    {"name": "http", "containerPort": 8080, "protocol": "TCP"},
+                    {"name": "dns", "containerPort": 53, "protocol": "UDP"}
+                  ]}
+                ]
+              },
+              "status": {"phase": "Running"}
             }
           ]
         }
@@ -93,7 +106,7 @@ final class KubernetesTests: XCTestCase {
 
         let ports = try KubernetesClient.parsePorts(Data(json.utf8))
 
-        XCTAssertEqual(ports.count, 2)
+        XCTAssertEqual(ports.count, 3)
         XCTAssertTrue(ports.contains(KubernetesPort(
             kind: .service,
             resourceName: "web",
@@ -105,6 +118,76 @@ final class KubernetesTests: XCTestCase {
             resourceName: "worker",
             portName: "metrics",
             remotePort: 9090
+        )))
+        XCTAssertTrue(ports.contains(KubernetesPort(
+            kind: .pod,
+            resourceName: "worker-abc",
+            portName: "http",
+            remotePort: 8080,
+            podPhase: "Running"
+        )))
+    }
+
+    func testPodPortForwardTargetsPodResource() {
+        let cluster = KubernetesClusterProfile(
+            id: UUID(),
+            name: "Production",
+            configSource: .localFile,
+            kubeconfigPath: "/tmp/kubeconfig",
+            contextName: "production"
+        )
+        let mapping = KubernetesPortMapping(
+            id: UUID(),
+            clusterID: cluster.id,
+            namespace: "payments",
+            resourceKind: .pod,
+            resourceName: "api-123",
+            portName: "http",
+            remotePort: 8080,
+            localHost: "127.0.0.1",
+            localPort: 18080
+        )
+
+        XCTAssertTrue(
+            KubernetesCommandBuilder.portForwardArguments(mapping: mapping, cluster: cluster)
+                .contains("pod/api-123")
+        )
+    }
+
+    func testKeepsDeploymentAndPodWithoutDeclaredPorts() throws {
+        let json = """
+        {
+          "items": [
+            {
+              "kind": "Deployment",
+              "metadata": {"name": "worker"},
+              "spec": {"template": {"spec": {"containers": [{}]}}}
+            },
+            {
+              "kind": "Pod",
+              "metadata": {"name": "worker-abc"},
+              "spec": {"containers": [{}]},
+              "status": {"phase": "Running"}
+            }
+          ]
+        }
+        """
+
+        let resources = try KubernetesClient.parsePorts(Data(json.utf8))
+
+        XCTAssertEqual(resources.count, 2)
+        XCTAssertTrue(resources.contains(KubernetesPort(
+            kind: .deployment,
+            resourceName: "worker",
+            portName: nil,
+            remotePort: nil
+        )))
+        XCTAssertTrue(resources.contains(KubernetesPort(
+            kind: .pod,
+            resourceName: "worker-abc",
+            portName: nil,
+            remotePort: nil,
+            podPhase: "Running"
         )))
     }
 

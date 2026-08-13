@@ -130,6 +130,7 @@ struct KubernetesClusterProfile: Codable, Identifiable, Hashable {
 enum KubernetesResourceKind: String, Codable, CaseIterable, Identifiable {
     case service
     case deployment
+    case pod
 
     var id: String { rawValue }
 
@@ -137,6 +138,7 @@ enum KubernetesResourceKind: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .service: "Service"
         case .deployment: "Deployment"
+        case .pod: "Pod"
         }
     }
 
@@ -144,6 +146,7 @@ enum KubernetesResourceKind: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .service: "service"
         case .deployment: "deployment"
+        case .pod: "pod"
         }
     }
 }
@@ -152,9 +155,10 @@ struct KubernetesPort: Identifiable, Hashable {
     var kind: KubernetesResourceKind
     var resourceName: String
     var portName: String?
-    var remotePort: Int
+    var remotePort: Int?
+    var podPhase: String? = nil
 
-    var id: String { "\(kind.rawValue)/\(resourceName)/\(remotePort)/\(portName ?? "")" }
+    var id: String { "\(kind.rawValue)/\(resourceName)/\(remotePort.map(String.init) ?? "undeclared")/\(portName ?? "")" }
     var resourceDisplayName: String { "\(kind.title)/\(resourceName)" }
 }
 

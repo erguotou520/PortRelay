@@ -88,7 +88,7 @@ enum KubernetesClient {
                 contextName: cluster.contextName
             ) + [
                 "--request-timeout=15s", "--namespace", namespace,
-                "get", "services,deployments", "-o", "json"
+                "get", "services,deployments,pods", "-o", "json"
             ]
         )
         return try parsePorts(data)
@@ -166,6 +166,7 @@ enum KubernetesClient {
                     ))
                 }
             } else if item.kind == "Deployment" {
+                let initialCount = ports.count
                 for container in item.spec?.template?.spec.containers ?? [] {
                     for port in container.ports ?? [] {
                         guard let number = port.containerPort, port.protocolName ?? "TCP" == "TCP" else { continue }
@@ -177,6 +178,38 @@ enum KubernetesClient {
                         ))
                     }
                 }
+                if ports.count == initialCount {
+                    ports.append(KubernetesPort(
+                        kind: .deployment,
+                        resourceName: item.metadata.name,
+                        portName: nil,
+                        remotePort: nil
+                    ))
+                }
+            } else if item.kind == "Pod" {
+                let initialCount = ports.count
+                for container in item.spec?.containers ?? [] {
+                    for port in container.ports ?? [] {
+                        guard let number = port.containerPort,
+                              port.protocolName ?? "TCP" == "TCP" else { continue }
+                        ports.append(KubernetesPort(
+                            kind: .pod,
+                            resourceName: item.metadata.name,
+                            portName: port.name,
+                            remotePort: number,
+                            podPhase: item.status?.phase
+                        ))
+                    }
+                }
+                if ports.count == initialCount {
+                    ports.append(KubernetesPort(
+                        kind: .pod,
+                        resourceName: item.metadata.name,
+                        portName: nil,
+                        remotePort: nil,
+                        podPhase: item.status?.phase
+                    ))
+                }
             }
         }
 
@@ -184,7 +217,7 @@ enum KubernetesClient {
             if $0.kind != $1.kind { return $0.kind.rawValue < $1.kind.rawValue }
             let resourceOrder = $0.resourceName.localizedStandardCompare($1.resourceName)
             if resourceOrder != .orderedSame { return resourceOrder == .orderedAscending }
-            return $0.remotePort < $1.remotePort
+            return ($0.remotePort ?? 0) < ($1.remotePort ?? 0)
         }
     }
 }
@@ -264,6 +297,7 @@ private struct KubernetesResource: Decodable {
     let kind: String
     let metadata: KubernetesMetadata
     let spec: KubernetesResourceSpec?
+    let status: PodStatus?
 }
 
 private struct KubernetesMetadata: Decodable {
@@ -273,6 +307,7 @@ private struct KubernetesMetadata: Decodable {
 private struct KubernetesResourceSpec: Decodable {
     let ports: [KubernetesServicePort]?
     let template: KubernetesPodTemplate?
+    let containers: [KubernetesContainer]?
 }
 
 private struct KubernetesServicePort: Decodable {

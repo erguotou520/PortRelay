@@ -10,6 +10,7 @@ struct KubernetesMappingEditorView: View {
     let existing: KubernetesPortMapping?
 
     @State private var localHost: String
+    @State private var remotePort: Int
     @State private var localPort: Int
     @State private var errorMessage: String?
 
@@ -24,7 +25,8 @@ struct KubernetesMappingEditorView: View {
         self.port = port
         self.existing = existing
         _localHost = State(initialValue: existing?.localHost ?? "127.0.0.1")
-        _localPort = State(initialValue: existing?.localPort ?? port.remotePort)
+        _remotePort = State(initialValue: existing?.remotePort ?? port.remotePort ?? 0)
+        _localPort = State(initialValue: existing?.localPort ?? port.remotePort ?? 0)
     }
 
     var body: some View {
@@ -44,7 +46,11 @@ struct KubernetesMappingEditorView: View {
             Form {
                 Section("集群端口") {
                     LabeledContent("资源", value: port.resourceDisplayName)
-                    LabeledContent("端口", value: String(port.remotePort))
+                    if port.remotePort == nil {
+                        TextField("远程端口", value: $remotePort, format: .number.grouping(.never))
+                    } else {
+                        LabeledContent("端口", value: String(remotePort))
+                    }
                     if let portName = port.portName, !portName.isEmpty {
                         LabeledContent("端口名称", value: portName)
                     }
@@ -92,7 +98,7 @@ struct KubernetesMappingEditorView: View {
                 resourceKind: port.kind,
                 resourceName: port.resourceName,
                 portName: port.portName,
-                remotePort: port.remotePort,
+                remotePort: remotePort,
                 localHost: localHost,
                 localPort: localPort,
                 isEnabled: existing?.isEnabled ?? false

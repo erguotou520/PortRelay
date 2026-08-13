@@ -204,12 +204,12 @@ final class GlobalSessionManager: ObservableObject {
     func openKubernetesLogs(
         cluster: KubernetesClusterProfile,
         namespace: String,
-        deployment: String,
+        sourceName: String,
         pod: KubernetesPod
     ) {
         let session = addSession(
             kind: .kubernetesLogs,
-            title: "\(deployment) · 日志",
+            title: "\(sourceName) · 日志",
             subtitle: "\(namespace) / \(pod.name)"
         )
         select(session)
@@ -228,12 +228,12 @@ final class GlobalSessionManager: ObservableObject {
     func openKubernetesShell(
         cluster: KubernetesClusterProfile,
         namespace: String,
-        deployment: String,
+        sourceName: String,
         pod: KubernetesPod
     ) {
         let session = addSession(
             kind: .kubernetesShell,
-            title: "\(deployment) · Shell",
+            title: "\(sourceName) · Shell",
             subtitle: "\(namespace) / \(pod.name)"
         )
         select(session)

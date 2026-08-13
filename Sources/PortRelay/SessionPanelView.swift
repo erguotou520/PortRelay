@@ -256,18 +256,18 @@ private final class TerminalScrollView: NSScrollView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         drawsBackground = true
-        backgroundColor = NSColor(calibratedWhite: 0.08, alpha: 1)
+        backgroundColor = .textBackgroundColor
         borderType = .noBorder
         hasVerticalScroller = true
         autohidesScrollers = true
 
         terminalView.isRichText = false
-        terminalView.isEditable = false
+        terminalView.isEditable = true
         terminalView.isSelectable = true
         terminalView.drawsBackground = true
         terminalView.backgroundColor = backgroundColor
-        terminalView.textColor = NSColor(calibratedWhite: 0.9, alpha: 1)
-        terminalView.insertionPointColor = .white
+        terminalView.textColor = .textColor
+        terminalView.insertionPointColor = .controlAccentColor
         terminalView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         terminalView.textContainerInset = NSSize(width: 10, height: 8)
         terminalView.autoresizingMask = [.width]
@@ -279,10 +279,12 @@ private final class TerminalScrollView: NSScrollView {
 
     func update(output: String, isEnabled: Bool) {
         terminalView.acceptsInput = isEnabled
+        terminalView.isEditable = isEnabled
         guard output != renderedOutput else { return }
         let wasAtBottom = contentView.bounds.maxY >= terminalView.bounds.maxY - 24
         renderedOutput = output
         terminalView.string = output
+        terminalView.setSelectedRange(NSRange(location: (output as NSString).length, length: 0))
         if wasAtBottom || output.count < 2_000 {
             terminalView.scrollToEndOfDocument(nil)
         }
@@ -302,6 +304,18 @@ private final class TerminalTextView: NSTextView {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         super.mouseDown(with: event)
+    }
+
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        guard acceptsInput else { return }
+        let value: String
+        if let attributed = insertString as? NSAttributedString {
+            value = attributed.string
+        } else {
+            value = String(describing: insertString)
+        }
+        guard let data = value.data(using: .utf8) else { return }
+        onInput?(data)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -327,5 +341,14 @@ private final class TerminalTextView: NSTextView {
               let value = NSPasteboard.general.string(forType: .string),
               let data = value.data(using: .utf8) else { return }
         onInput?(data)
+    }
+
+    override func cut(_ sender: Any?) {
+        copy(sender)
+    }
+
+    override func deleteBackward(_ sender: Any?) {
+        guard acceptsInput else { return }
+        onInput?(Data([0x7F]))
     }
 }

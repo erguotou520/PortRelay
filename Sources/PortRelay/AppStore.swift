@@ -295,8 +295,10 @@ final class AppStore: ObservableObject {
                 && $0.namespace == namespace
                 && $0.resourceKind == port.kind
                 && $0.resourceName == port.resourceName
-                && $0.remotePort == port.remotePort
-                && $0.portName == port.portName
+                && (port.remotePort == nil || (
+                    $0.remotePort == port.remotePort
+                        && $0.portName == port.portName
+                ))
         }
     }
 

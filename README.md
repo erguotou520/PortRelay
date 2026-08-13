@@ -13,11 +13,13 @@ PortRelay 是一个原生 SwiftUI macOS 端口映射应用，同时提供 SSH �
 - 映射状态实时显示为未启动、连接中、已映射或失败，并保留 SSH 错误信息。
 - 记住映射的启用状态；正常退出会停止 SSH 子进程，重新打开应用后自动恢复此前启用的映射。
 - 密码保存在 macOS 钥匙串；粘贴的私钥保存在应用支持目录并设置为 `0600` 权限。
-- 顶部可切换到 Kubernetes 模式，以“集群 → Namespace → 端口”三栏浏览 Service 和 Deployment。
+- 顶部可切换到 Kubernetes 模式，以“集群 → Namespace → 端口”三栏浏览 Service、Deployment 和 Pod。
 - Kubernetes 集群支持选择本地 kubeconfig，或直接粘贴 YAML；同一份配置中的 Context 可分别添加。
 - 可将 Service/Deployment 声明的 TCP 端口映射到 `127.0.0.1` 或 `0.0.0.0`，并支持修改、删除、启动、停止和失败重试。
 - Kubernetes 映射会记住启用状态，应用重新打开后通过 `kubectl port-forward` 自动恢复。
 - Deployment 支持选择运行中的 Pod，流式查看并搜索日志，或自动使用 bash、降级到 sh 建立 Shell 会话。
+- Pod 支持直接配置端口映射、流式查看日志和打开交互式 Shell。
+- 未声明 `containerPort` 的 Deployment 和 Pod 仍会显示，可查看日志、打开 Shell，并手动填写远程端口进行映射。
 - SSH 服务器支持直接打开交互式 Shell；Kubernetes 日志、Kubernetes Shell 和 SSH Shell 统一显示在全局底部面板，切换工作区时会话仍会保留。
 
 ## 开发与构建
