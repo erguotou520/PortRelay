@@ -1,0 +1,49 @@
+name: Build macOS App
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and package
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Run tests
+        run: swift test --disable-sandbox
+
+      - name: Build app and disk image
+        run: ./Scripts/build-dmg.sh
+
+      - name: Verify package
+        run: |
+          codesign --verify --deep --strict --verbose=2 dist/PortRelay.app
+          hdiutil imageinfo dist/PortRelay.dmg >/dev/null
+          ditto -x -k dist/PortRelay-macOS.zip /tmp/portrelay-zip-check
+          test -x /tmp/portrelay-zip-check/PortRelay.app/Contents/MacOS/PortRelay
+          test -x /tmp/portrelay-zip-check/PortRelay.app/Contents/MacOS/PortRelayAskPass
+
+      - name: Upload macOS packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: PortRelay-macOS
+          path: |
+            dist/PortRelay-macOS.zip
+            dist/PortRelay.dmg
+          if-no-files-found: error
+          retention-days: 14

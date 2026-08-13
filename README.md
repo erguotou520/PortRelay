@@ -24,6 +24,18 @@ PortRelay 是一个原生 SwiftUI macOS 端口映射应用，提供 `ssh -N -L` 
 
 产物位于 `dist/PortRelay.app`，最低支持 macOS 14。
 
+生成可分发的 ZIP 和 DMG：
+
+```sh
+./Scripts/build-dmg.sh
+```
+
+产物位于 `dist/PortRelay-macOS.zip` 和 `dist/PortRelay.dmg`。
+
+## CI
+
+GitHub Actions 会在推送到 `main`、提交 Pull Request 或手动触发时运行测试并打包。构建完成后，可在对应工作流页面的 Artifacts 区域下载 `PortRelay-macOS`，其中包含 ZIP 和 DMG。CI 产物使用临时签名，适合测试和内部安装；公开分发仍需配置 Apple Developer ID 签名与公证。
+
 ## 使用说明
 
 1. 添加或导入服务器。

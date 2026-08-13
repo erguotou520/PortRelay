@@ -6,12 +6,12 @@ BUILD_DIR="$PROJECT_DIR/.build"
 DIST_DIR="$PROJECT_DIR/dist"
 APP_DIR="$DIST_DIR/PortRelay.app"
 
-mkdir -p /tmp/portforward-clang-cache "$DIST_DIR"
-CLANG_MODULE_CACHE_PATH=/tmp/portforward-clang-cache \
+mkdir -p /tmp/portrelay-clang-cache "$DIST_DIR"
+CLANG_MODULE_CACHE_PATH=/tmp/portrelay-clang-cache \
     SWIFTPM_ENABLE_SHARED_CACHE=false \
     swift build --disable-sandbox -c release --package-path "$PROJECT_DIR" --scratch-path "$BUILD_DIR"
 
-BIN_DIR=$(CLANG_MODULE_CACHE_PATH=/tmp/portforward-clang-cache \
+BIN_DIR=$(CLANG_MODULE_CACHE_PATH=/tmp/portrelay-clang-cache \
     swift build --disable-sandbox -c release --package-path "$PROJECT_DIR" --scratch-path "$BUILD_DIR" --show-bin-path)
 
 rm -rf "$APP_DIR"
