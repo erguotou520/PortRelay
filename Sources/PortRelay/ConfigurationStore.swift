@@ -53,6 +53,36 @@ enum ConfigurationStore {
             .appendingPathComponent(serverID.uuidString)
         try? FileManager.default.removeItem(at: url)
     }
+
+    static func saveKubeconfig(_ contents: String, clusterID: UUID) throws -> String {
+        let trimmed = contents.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.contains("apiVersion:"), trimmed.contains("clusters:") else {
+            throw ValidationError.message("粘贴的内容看起来不是有效的 kubeconfig YAML")
+        }
+        let directory = applicationDirectory.appendingPathComponent("Kubeconfigs", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let url = directory.appendingPathComponent("\(clusterID.uuidString).yaml")
+        try Data(trimmed.utf8).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        return url.path
+    }
+
+    static func loadKubeconfig(for cluster: KubernetesClusterProfile) -> String {
+        guard cluster.configSource == .embedded,
+              let data = FileManager.default.contents(atPath: cluster.kubeconfigPath) else { return "" }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    static func deleteKubeconfig(for clusterID: UUID) {
+        let url = applicationDirectory
+            .appendingPathComponent("Kubeconfigs", isDirectory: true)
+            .appendingPathComponent("\(clusterID.uuidString).yaml")
+        try? FileManager.default.removeItem(at: url)
+    }
 }
 
 private extension JSONEncoder {

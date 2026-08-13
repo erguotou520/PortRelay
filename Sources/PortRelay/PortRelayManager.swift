@@ -19,7 +19,7 @@ final class PortRelayManager: ObservableObject {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = arguments(mapping: mapping, server: server)
+        process.arguments = SSHCommandBuilder.portForwardArguments(mapping: mapping, server: server)
         process.standardInput = FileHandle.nullDevice
 
         let errorPipe = Pipe()
@@ -35,12 +35,7 @@ final class PortRelayManager: ObservableObject {
         }
 
         if server.authentication == .password {
-            var environment = ProcessInfo.processInfo.environment
-            environment["SSH_ASKPASS"] = askPassExecutableURL.path
-            environment["SSH_ASKPASS_REQUIRE"] = "force"
-            environment["DISPLAY"] = "portforward:0"
-            environment["PORTFORWARD_KEYCHAIN_ACCOUNT"] = server.id.uuidString
-            process.environment = environment
+            process.environment = SSHCommandBuilder.environment(for: server)
         }
 
         process.terminationHandler = { [weak self] terminated in
@@ -94,14 +89,24 @@ final class PortRelayManager: ObservableObject {
         }
     }
 
-    private func arguments(mapping: PortMapping, server: ServerProfile) -> [String] {
+}
+
+enum SSHCommandBuilder {
+    static func portForwardArguments(mapping: PortMapping, server: ServerProfile) -> [String] {
         var arguments = [
             "-N", "-T",
             "-o", "ExitOnForwardFailure=yes",
+            "-L", "\(mapping.localHost):\(mapping.localPort):\(mapping.remoteHost):\(mapping.remotePort)"
+        ]
+        arguments += connectionArguments(server: server)
+        return arguments
+    }
+
+    static func connectionArguments(server: ServerProfile) -> [String] {
+        var arguments = [
             "-o", "ServerAliveInterval=30",
             "-o", "ServerAliveCountMax=3",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-L", "\(mapping.localHost):\(mapping.localPort):\(mapping.remoteHost):\(mapping.remotePort)"
+            "-o", "StrictHostKeyChecking=accept-new"
         ]
 
         if server.source == .sshConfig, let alias = server.sshAlias {
@@ -128,7 +133,17 @@ final class PortRelayManager: ObservableObject {
         return arguments
     }
 
-    private var askPassExecutableURL: URL {
+    static func environment(for server: ServerProfile) -> [String: String]? {
+        guard server.authentication == .password else { return nil }
+        var environment = ProcessInfo.processInfo.environment
+        environment["SSH_ASKPASS"] = askPassExecutableURL.path
+        environment["SSH_ASKPASS_REQUIRE"] = "force"
+        environment["DISPLAY"] = "portrelay:0"
+        environment["PORTFORWARD_KEYCHAIN_ACCOUNT"] = server.id.uuidString
+        return environment
+    }
+
+    private static var askPassExecutableURL: URL {
         let executableDirectory = Bundle.main.executableURL?.deletingLastPathComponent()
         return (executableDirectory ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
             .appendingPathComponent("PortRelayAskPass")

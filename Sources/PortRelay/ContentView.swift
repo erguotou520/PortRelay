@@ -1,6 +1,71 @@
 import SwiftUI
 
 struct ContentView: View {
+    @State private var mode = WorkspaceMode.ssh
+    @ObservedObject private var sessions = AppStore.shared.sessionManager
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                HStack(spacing: 30) {
+                    tabButton(.ssh)
+                    tabButton(.kubernetes)
+                }
+                .frame(width: 240)
+            }
+            .frame(height: 38)
+            .frame(maxWidth: .infinity)
+            .background(.bar)
+            Divider()
+
+            Group {
+                switch mode {
+                case .ssh:
+                    SSHWorkspaceView()
+                case .kubernetes:
+                    KubernetesWorkspaceView()
+                }
+            }
+            .frame(maxHeight: .infinity)
+
+            if !sessions.sessions.isEmpty {
+                Divider()
+                SessionPanelView(
+                    manager: sessions,
+                    isCollapsed: $sessions.isPanelCollapsed
+                )
+            }
+        }
+        .ignoresSafeArea(.container, edges: .top)
+    }
+
+    private func tabButton(_ item: WorkspaceMode) -> some View {
+        Button {
+            mode = item
+        } label: {
+            VStack(spacing: 5) {
+                Text(item.title)
+                    .font(.system(size: 13, weight: mode == item ? .semibold : .regular))
+                Rectangle()
+                    .fill(mode == item ? Color.accentColor : .clear)
+                    .frame(height: 2)
+            }
+            .foregroundStyle(mode == item ? .primary : .secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private enum WorkspaceMode: String, CaseIterable, Identifiable {
+    case ssh
+    case kubernetes
+
+    var id: String { rawValue }
+    var title: String { self == .ssh ? "SSH 转发" : "Kubernetes" }
+}
+
+private struct SSHWorkspaceView: View {
     @EnvironmentObject private var store: AppStore
     @State private var showingAddServer = false
     @State private var showingSSHImport = false
@@ -10,44 +75,19 @@ struct ContentView: View {
     @State private var importMessage: String?
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: $serverSelection) {
-                Section("服务器") {
-                    ForEach(store.servers) { server in
-                        ServerRow(server: server)
-                            .tag(server.id)
-                            .contextMenu {
-                                Button("修改") { editingServer = server }
-                                Divider()
-                                Button(deleteServerTitle(for: server), role: .destructive) {
-                                    deletingServerIDs = deletionIDs(for: server)
-                                }
-                            }
-                    }
-                }
-            }
-            .onDeleteCommand {
-                if !serverSelection.isEmpty {
-                    deletingServerIDs = serverSelection
-                }
-            }
-            .overlay {
-                if store.servers.isEmpty {
-                    ContentUnavailableView(
-                        "还没有服务器",
-                        systemImage: "server.rack",
-                        description: Text("点击下方的加号添加，或从 SSH 配置批量导入。")
-                    )
-                }
-            }
-            .navigationSplitViewColumnWidth(min: 230, ideal: 270, max: 360)
-            .toolbar {
-                ToolbarItemGroup {
+        HSplitView {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("SSH 服务器")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
                     Button {
                         showingAddServer = true
                     } label: {
                         Label("添加服务器", systemImage: "plus")
                     }
+                    .buttonStyle(.bordered)
 
                     Menu {
                         Button("批量导入 ~/.ssh/config") {
@@ -58,28 +98,62 @@ struct ContentView: View {
                     } label: {
                         Label("导入", systemImage: "square.and.arrow.down")
                     }
+                    .menuStyle(.button)
+                    .fixedSize()
+                    .help("导入 SSH 配置")
+                }
+                .padding(.horizontal, 14)
+                .frame(height: 46)
+                Divider()
 
-                    if !serverSelection.isEmpty {
-                        Button(role: .destructive) {
-                            deletingServerIDs = serverSelection
-                        } label: {
-                            Label("删除所选服务器", systemImage: "trash")
-                        }
-                        .help("删除所选的 \(serverSelection.count) 台服务器")
+                List(selection: $serverSelection) {
+                    ForEach(store.servers) { server in
+                        ServerRow(server: server)
+                            .tag(server.id)
+                            .contextMenu {
+                                Button("连接服务器", systemImage: "terminal") {
+                                    store.sessionManager.openSSH(server: server)
+                                }
+                                Divider()
+                                Button("修改") { editingServer = server }
+                                Divider()
+                                Button(deleteServerTitle(for: server), role: .destructive) {
+                                    deletingServerIDs = deletionIDs(for: server)
+                                }
+                            }
                     }
                 }
+                .onDeleteCommand {
+                    if !serverSelection.isEmpty {
+                        deletingServerIDs = serverSelection
+                    }
+                }
+                .overlay {
+                    if store.servers.isEmpty {
+                        ContentUnavailableView(
+                            "还没有服务器",
+                            systemImage: "server.rack",
+                            description: Text("点击上方的加号添加，或导入 SSH 配置。")
+                        )
+                    }
+                }
+                .listStyle(.plain)
             }
-        } detail: {
-            if let server = store.selectedServer {
-                PortMappingsView(server: server)
-                    .id(server.id)
-            } else {
-                ContentUnavailableView(
-                    "选择一台服务器",
-                    systemImage: "arrow.left",
-                    description: Text("右侧将显示该服务器的端口映射。")
-                )
+            .frame(minWidth: 250, idealWidth: 280, maxWidth: 360)
+
+            Group {
+                if let server = store.selectedServer {
+                    PortMappingsView(server: server)
+                        .id(server.id)
+                } else {
+                    ContentUnavailableView(
+                        "选择一台服务器",
+                        systemImage: "arrow.left",
+                        description: Text("右侧将显示该服务器的端口映射。")
+                    )
+                }
             }
+            .frame(minWidth: 700, maxWidth: .infinity, maxHeight: .infinity)
         }
         .sheet(isPresented: $showingAddServer) {
             ServerEditorView(existing: nil)
@@ -167,6 +241,8 @@ struct ContentView: View {
 }
 
 private struct ServerRow: View {
+    @EnvironmentObject private var store: AppStore
+    @ObservedObject private var manager = AppStore.shared.forwardManager
     let server: ServerProfile
 
     var body: some View {
@@ -181,8 +257,18 @@ private struct ServerRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            Spacer()
+            if hasRunningMapping {
+                Circle().fill(.green).frame(width: 7, height: 7)
+            }
         }
         .padding(.vertical, 3)
+    }
+
+    private var hasRunningMapping: Bool {
+        store.mappings(for: server.id).contains {
+            manager.status(for: $0.id) == .running
+        }
     }
 }
 

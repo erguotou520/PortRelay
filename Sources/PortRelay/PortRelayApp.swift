@@ -9,7 +9,7 @@ struct PortRelayApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 900, minHeight: 560)
+                .frame(minWidth: 1080, minHeight: 620)
                 .alert(
                     "提示",
                     isPresented: Binding(
@@ -22,8 +22,8 @@ struct PortRelayApp: App {
                     Text(store.alertMessage ?? "")
                 }
         }
-        .windowStyle(.titleBar)
-        .defaultSize(width: 1080, height: 680)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1240, height: 740)
         .commands {
             CommandGroup(replacing: .newItem) { }
         }
@@ -34,6 +34,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             AppStore.shared.forwardManager.stopAll()
+            AppStore.shared.kubernetesForwardManager.stopAll()
+            AppStore.shared.sessionManager.stopAll()
         }
     }
 }

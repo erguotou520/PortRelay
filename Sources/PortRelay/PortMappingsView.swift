@@ -5,7 +5,6 @@ struct PortMappingsView: View {
     @ObservedObject private var manager: PortRelayManager
     let server: ServerProfile
 
-    @State private var searchText = ""
     @State private var showingAddMapping = false
     @State private var editingMapping: PortMapping?
     @State private var mappingSelection = Set<UUID>()
@@ -17,7 +16,7 @@ struct PortMappingsView: View {
     }
 
     private var filteredMappings: [PortMapping] {
-        store.mappings(for: server.id, matching: searchText)
+        store.mappings(for: server.id)
     }
 
     var body: some View {
@@ -29,38 +28,16 @@ struct PortMappingsView: View {
 
             if filteredMappings.isEmpty {
                 ContentUnavailableView {
-                    Label(searchText.isEmpty ? "还没有端口映射" : "没有匹配的端口", systemImage: "point.3.connected.trianglepath.dotted")
+                    Label("还没有端口映射", systemImage: "point.3.connected.trianglepath.dotted")
                 } description: {
-                    Text(searchText.isEmpty ? "添加一个映射，例如将远程 127.0.0.1:80 映射到本机 127.0.0.1:8082。" : "尝试其他名称、地址或端口。")
+                    Text("添加一个映射，例如将远程 127.0.0.1:80 映射到本机 127.0.0.1:8082。")
                 } actions: {
-                    if searchText.isEmpty {
-                        Button("添加端口映射") { showingAddMapping = true }
-                            .buttonStyle(.borderedProminent)
-                    }
+                    Button("添加端口映射") { showingAddMapping = true }
+                        .buttonStyle(.borderedProminent)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 mappingList
-            }
-        }
-        .navigationTitle(server.name)
-        .searchable(text: $searchText, placement: .toolbar, prompt: "搜索端口映射")
-        .toolbar {
-            ToolbarItemGroup {
-                Button {
-                    showingAddMapping = true
-                } label: {
-                    Label("添加端口映射", systemImage: "plus")
-                }
-
-                if !mappingSelection.isEmpty {
-                    Button(role: .destructive) {
-                        deletingMappingIDs = mappingSelection
-                    } label: {
-                        Label("删除所选映射", systemImage: "trash")
-                    }
-                    .help("删除所选的 \(mappingSelection.count) 个映射")
-                }
             }
         }
         .sheet(isPresented: $showingAddMapping) {
@@ -112,6 +89,12 @@ struct PortMappingsView: View {
             Text("\(runningCount) 个运行中")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(runningCount > 0 ? .green : .secondary)
+            Button {
+                showingAddMapping = true
+            } label: {
+                Label("添加映射", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
         }
         .padding(.horizontal, 22)
         .frame(height: 56)

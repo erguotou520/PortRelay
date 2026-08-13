@@ -1,6 +1,6 @@
 # PortRelay
 
-PortRelay 是一个原生 SwiftUI macOS 端口映射应用，提供 `ssh -N -L` 的图形化管理界面。
+PortRelay 是一个原生 SwiftUI macOS 端口映射应用，同时提供 SSH 和 Kubernetes 端口转发的图形化管理界面。
 
 应用图标以服务器节点、转发隧道和在线状态为核心视觉，并已随独立应用包安装。
 
@@ -13,6 +13,12 @@ PortRelay 是一个原生 SwiftUI macOS 端口映射应用，提供 `ssh -N -L` 
 - 映射状态实时显示为未启动、连接中、已映射或失败，并保留 SSH 错误信息。
 - 记住映射的启用状态；正常退出会停止 SSH 子进程，重新打开应用后自动恢复此前启用的映射。
 - 密码保存在 macOS 钥匙串；粘贴的私钥保存在应用支持目录并设置为 `0600` 权限。
+- 顶部可切换到 Kubernetes 模式，以“集群 → Namespace → 端口”三栏浏览 Service 和 Deployment。
+- Kubernetes 集群支持选择本地 kubeconfig，或直接粘贴 YAML；同一份配置中的 Context 可分别添加。
+- 可将 Service/Deployment 声明的 TCP 端口映射到 `127.0.0.1` 或 `0.0.0.0`，并支持修改、删除、启动、停止和失败重试。
+- Kubernetes 映射会记住启用状态，应用重新打开后通过 `kubectl port-forward` 自动恢复。
+- Deployment 支持选择运行中的 Pod，流式查看并搜索日志，或自动使用 bash、降级到 sh 建立 Shell 会话。
+- SSH 服务器支持直接打开交互式 Shell；Kubernetes 日志、Kubernetes Shell 和 SSH Shell 统一显示在全局底部面板，切换工作区时会话仍会保留。
 
 ## 开发与构建
 
@@ -42,5 +48,7 @@ GitHub Actions 会在推送到 `main`、提交 Pull Request 或手动触发时�
 2. 选中服务器，在右侧添加端口映射。
 3. 右键映射选择“启动映射”，或点击行尾播放按钮。
 4. 退出应用时，应用创建的所有 SSH 映射进程都会停止。
+
+Kubernetes 映射需要本机已安装 `kubectl`，并且 kubeconfig 对目标 Namespace、Service、Deployment 和 Pod 具有相应读取/转发权限。退出应用时，应用创建的 `kubectl port-forward` 进程也会停止。
 
 监听 `0.0.0.0` 会让同一网络中的其他设备也可能访问该端口，请结合 macOS 防火墙谨慎使用。
