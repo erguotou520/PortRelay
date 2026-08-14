@@ -154,6 +154,8 @@ enum KubernetesClient {
         let list = try JSONDecoder().decode(ResourceList.self, from: data)
         var ports: [KubernetesPort] = []
 
+        let services = list.items.filter { $0.kind == "Service" }
+
         for item in list.items {
             if item.kind == "Service" {
                 for port in item.spec?.ports ?? [] {
@@ -167,13 +169,32 @@ enum KubernetesClient {
                 }
             } else if item.kind == "Deployment" {
                 let initialCount = ports.count
-                for container in item.spec?.template?.spec.containers ?? [] {
+                let containers = item.spec?.template?.spec.containers ?? []
+                for container in containers {
                     for port in container.ports ?? [] {
                         guard let number = port.containerPort, port.protocolName ?? "TCP" == "TCP" else { continue }
                         ports.append(KubernetesPort(
                             kind: .deployment,
                             resourceName: item.metadata.name,
                             portName: port.name,
+                            remotePort: number
+                        ))
+                    }
+                }
+                let podLabels = item.spec?.template?.metadata?.labels ?? [:]
+                for service in services where service.spec?.serviceSelector?.matches(podLabels) == true {
+                    for servicePort in service.spec?.ports ?? [] {
+                        guard servicePort.protocolName ?? "TCP" == "TCP",
+                              let number = servicePort.targetPortNumber(in: containers) else { continue }
+                        guard !ports.contains(where: {
+                            $0.kind == .deployment
+                                && $0.resourceName == item.metadata.name
+                                && $0.remotePort == number
+                        }) else { continue }
+                        ports.append(KubernetesPort(
+                            kind: .deployment,
+                            resourceName: item.metadata.name,
+                            portName: servicePort.name,
                             remotePort: number
                         ))
                     }
@@ -302,27 +323,62 @@ private struct KubernetesResource: Decodable {
 
 private struct KubernetesMetadata: Decodable {
     let name: String
+    let labels: [String: String]?
 }
 
 private struct KubernetesResourceSpec: Decodable {
     let ports: [KubernetesServicePort]?
     let template: KubernetesPodTemplate?
     let containers: [KubernetesContainer]?
+    let serviceSelector: [String: String]?
+
+    private enum CodingKeys: String, CodingKey {
+        case ports, template, containers
+        case serviceSelector = "selector"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ports = try container.decodeIfPresent([KubernetesServicePort].self, forKey: .ports)
+        template = try container.decodeIfPresent(KubernetesPodTemplate.self, forKey: .template)
+        containers = try container.decodeIfPresent([KubernetesContainer].self, forKey: .containers)
+        serviceSelector = try? container.decode([String: String].self, forKey: .serviceSelector)
+    }
 }
 
 private struct KubernetesServicePort: Decodable {
     let name: String?
     let port: Int?
+    let targetPort: KubernetesTargetPort?
     let protocolName: String?
 
     private enum CodingKeys: String, CodingKey {
-        case name, port
+        case name, port, targetPort
         case protocolName = "protocol"
+    }
+
+    func targetPortNumber(in containers: [KubernetesContainer]) -> Int? {
+        switch targetPort {
+        case .number(let number):
+            return number
+        case .name(let name):
+            return containers
+                .flatMap { $0.ports ?? [] }
+                .first { $0.name == name }?
+                .containerPort
+        case nil:
+            return port
+        }
     }
 }
 
 private struct KubernetesPodTemplate: Decodable {
+    let metadata: KubernetesPodTemplateMetadata?
     let spec: KubernetesPodSpec
+}
+
+private struct KubernetesPodTemplateMetadata: Decodable {
+    let labels: [String: String]?
 }
 
 private struct KubernetesPodSpec: Decodable {
@@ -341,6 +397,26 @@ private struct KubernetesContainerPort: Decodable {
     private enum CodingKeys: String, CodingKey {
         case name, containerPort
         case protocolName = "protocol"
+    }
+}
+
+private enum KubernetesTargetPort: Decodable {
+    case number(Int)
+    case name(String)
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let number = try? container.decode(Int.self) {
+            self = .number(number)
+        } else {
+            self = .name(try container.decode(String.self))
+        }
+    }
+}
+
+private extension Dictionary where Key == String, Value == String {
+    func matches(_ labels: [String: String]) -> Bool {
+        !isEmpty && allSatisfy { labels[$0.key] == $0.value }
     }
 }
 

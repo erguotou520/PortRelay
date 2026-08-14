@@ -191,6 +191,86 @@ final class KubernetesTests: XCTestCase {
         )))
     }
 
+    func testInfersDeploymentPortFromMatchingServiceTargetPort() throws {
+        let json = """
+        {
+          "items": [
+            {
+              "kind": "Deployment",
+              "metadata": {"name": "openmodels-backend"},
+              "spec": {
+                "template": {
+                  "metadata": {"labels": {"app": "openmodels-backend"}},
+                  "spec": {"containers": [{}]}
+                }
+              }
+            },
+            {
+              "kind": "Service",
+              "metadata": {"name": "openmodels-backend"},
+              "spec": {
+                "selector": {"app": "openmodels-backend"},
+                "ports": [
+                  {"name": "http", "port": 8080, "targetPort": 8080, "protocol": "TCP"}
+                ]
+              }
+            }
+          ]
+        }
+        """
+
+        let ports = try KubernetesClient.parsePorts(Data(json.utf8))
+
+        XCTAssertTrue(ports.contains(KubernetesPort(
+            kind: .deployment,
+            resourceName: "openmodels-backend",
+            portName: "http",
+            remotePort: 8080
+        )))
+        XCTAssertFalse(ports.contains(KubernetesPort(
+            kind: .deployment,
+            resourceName: "openmodels-backend",
+            portName: nil,
+            remotePort: nil
+        )))
+    }
+
+    func testDoesNotInferDeploymentPortFromUnmatchedService() throws {
+        let json = """
+        {
+          "items": [
+            {
+              "kind": "Deployment",
+              "metadata": {"name": "worker"},
+              "spec": {
+                "template": {
+                  "metadata": {"labels": {"app": "worker"}},
+                  "spec": {"containers": [{}]}
+                }
+              }
+            },
+            {
+              "kind": "Service",
+              "metadata": {"name": "api"},
+              "spec": {
+                "selector": {"app": "api"},
+                "ports": [{"port": 80, "targetPort": 8080}]
+              }
+            }
+          ]
+        }
+        """
+
+        let ports = try KubernetesClient.parsePorts(Data(json.utf8))
+
+        XCTAssertTrue(ports.contains(KubernetesPort(
+            kind: .deployment,
+            resourceName: "worker",
+            portName: nil,
+            remotePort: nil
+        )))
+    }
+
     func testNamespacesAreSorted() throws {
         let data = Data(#"{"items":[{"metadata":{"name":"zeta"}},{"metadata":{"name":"default"}}]}"#.utf8)
 
