@@ -772,16 +772,18 @@ private struct KubernetesPortRow: View {
                         .help("查看 \(item.port.kind.title) 日志")
                     }
                 }
-                Text(item.port.kind.title)
-                    .font(.caption2.weight(.medium))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(item.port.kind == .service ? .blue.opacity(0.12) : .purple.opacity(0.12), in: Capsule())
-                if item.port.kind == .pod, let phase = item.port.podPhase {
-                    Text(phase)
-                        .font(.caption2)
-                        .foregroundStyle(phase == "Running" ? .green : .secondary)
+                HStack(spacing: 6) {
+                    Text(item.port.kind.title)
+                        .font(.caption2.weight(.medium))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(item.port.kind == .service ? .blue.opacity(0.12) : .purple.opacity(0.12), in: Capsule())
+                    if item.port.kind == .pod, let phase = item.port.podPhase {
+                        Text(phase)
+                            .font(.caption2)
+                            .foregroundStyle(phase == "Running" ? .green : .secondary)
+                    }
                 }
                 if case .failed(let message) = status {
                     Text(message).font(.caption2).foregroundStyle(.red).lineLimit(1).help(message)
