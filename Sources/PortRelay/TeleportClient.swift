@@ -95,6 +95,8 @@ enum TeleportClient {
         ), isCredentialValid(status, minimumValidity: renewalThreshold) {
             if FileManager.default.contents(atPath: cluster.kubeconfigPath)?.isEmpty != false {
                 _ = try await configureKubeconfig(for: cluster)
+            } else {
+                try await ensureKubeClusterSelected(cluster)
             }
             return
         }
@@ -154,6 +156,32 @@ enum TeleportClient {
         }
     }
 
+    static func parseSelectedKubeCluster(_ data: Data) -> String? {
+        guard let values = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return nil
+        }
+        return values.first(where: { $0["selected"] as? Bool == true }).flatMap { value in
+            if let name = value["kube_cluster_name"] as? String { return name }
+            if let name = value["name"] as? String { return name }
+            if let metadata = value["metadata"] as? [String: Any] {
+                return metadata["name"] as? String
+            }
+            return nil
+        }
+    }
+
+    private static func ensureKubeClusterSelected(_ cluster: KubernetesClusterProfile) async throws {
+        let data = try await TeleportRunner.run(
+            TeleportCommandBuilder.kubeListArguments(
+                proxy: normalizeProxy(cluster.teleportProxy),
+                username: cluster.teleportUsername
+            )
+        )
+        if parseSelectedKubeCluster(data) != cluster.teleportKubeCluster {
+            _ = try await configureKubeconfig(for: cluster)
+        }
+    }
+
     private static func validateInstallation() throws {
         let paths = (KubectlRunner.kubectlEnvironment["PATH"] ?? "")
             .split(separator: ":")
@@ -178,28 +206,45 @@ enum TeleportRunner {
         environment: [String: String] = KubectlRunner.kubectlEnvironment
     ) async throws -> Data {
         try await Task.detached(priority: .userInitiated) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = arguments
-            process.environment = environment
-            process.standardInput = FileHandle.nullDevice
-            let output = Pipe()
-            let error = Pipe()
-            process.standardOutput = output
-            process.standardError = error
-            do {
-                try process.run()
-            } catch {
-                throw ValidationError.message("无法启动 tsh：\(error.localizedDescription)")
+            var failedAttempt = 0
+            while true {
+                do {
+                    return try runOnce(arguments, environment: environment)
+                } catch {
+                    guard failedAttempt < TeleportRetryPolicy.retryDelays.count,
+                          TeleportRetryPolicy.shouldRetry(error.localizedDescription) else { throw error }
+                    try await Task.sleep(for: TeleportRetryPolicy.retryDelays[failedAttempt])
+                    failedAttempt += 1
+                }
             }
-            process.waitUntilExit()
-            let outputData = output.fileHandleForReading.readDataToEndOfFile()
-            let errorData = error.fileHandleForReading.readDataToEndOfFile()
-            guard process.terminationStatus == 0 else {
-                throw ValidationError.message(errorMessage(errorData, fallback: outputData))
-            }
-            return outputData
         }.value
+    }
+
+    private static func runOnce(
+        _ arguments: [String],
+        environment: [String: String]
+    ) throws -> Data {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = arguments
+        process.environment = environment
+        process.standardInput = FileHandle.nullDevice
+        let output = Pipe()
+        let error = Pipe()
+        process.standardOutput = output
+        process.standardError = error
+        do {
+            try process.run()
+        } catch {
+            throw ValidationError.message("无法启动 tsh：\(error.localizedDescription)")
+        }
+        process.waitUntilExit()
+        let outputData = output.fileHandleForReading.readDataToEndOfFile()
+        let errorData = error.fileHandleForReading.readDataToEndOfFile()
+        guard process.terminationStatus == 0 else {
+            throw ValidationError.message(errorMessage(errorData, fallback: outputData))
+        }
+        return outputData
     }
 
     static func login(arguments: [String], password: String, mfaCode: String?) async throws {
@@ -272,13 +317,43 @@ enum TeleportRunner {
 
     private static func errorMessage(_ primary: Data, fallback: Data) -> String {
         let value = primary.isEmpty ? fallback : primary
-        let message = String(decoding: value, as: UTF8.self)
+        let message = CommandOutputText.cleaned(String(decoding: value, as: UTF8.self))
+        return message.isEmpty ? "tsh 执行失败" : message
+    }
+}
+
+enum TeleportRetryPolicy {
+    static let retryDelays: [Duration] = [
+        .milliseconds(300),
+        .milliseconds(800),
+        .milliseconds(1_500)
+    ]
+
+    static func shouldRetry(_ message: String) -> Bool {
+        let value = message.lowercased()
+        return value.contains("connection reset by peer")
+            || value.contains("unexpected eof")
+            || value.contains("proxy not available")
+            || value.contains("internal server error")
+            || value.contains("client.timeout exceeded")
+            || value.contains("context deadline exceeded")
+            || value.contains("i/o timeout")
+            || value.contains("tls handshake timeout")
+            || value.contains("no such host")
+            || value.contains("bad gateway")
+            || value.contains("service unavailable")
+            || value.contains("gateway timeout")
+    }
+}
+
+enum CommandOutputText {
+    static func cleaned(_ value: String) -> String {
+        value
             .replacingOccurrences(
                 of: "\u{001B}\\[[0-?]*[ -/]*[@-~]",
                 with: "",
                 options: .regularExpression
             )
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return message.isEmpty ? "tsh 执行失败" : message
     }
 }

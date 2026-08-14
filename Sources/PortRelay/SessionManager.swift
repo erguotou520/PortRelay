@@ -30,7 +30,7 @@ final class CommandSession: ObservableObject, Identifiable {
     let id = UUID()
     let kind: SessionKind
     let title: String
-    let subtitle: String
+    @Published private(set) var subtitle: String
 
     @Published private(set) var output = ""
     @Published private(set) var status = SessionStatus.connecting
@@ -52,7 +52,7 @@ final class CommandSession: ObservableObject, Identifiable {
         environment: [String: String]? = nil,
         pseudoTerminal: Bool
     ) {
-        guard process == nil else { return }
+        guard process == nil, status == .connecting else { return }
 
         let process = Process()
         if pseudoTerminal {
@@ -98,6 +98,10 @@ final class CommandSession: ObservableObject, Identifiable {
         } catch {
             fail("无法启动命令：\(error.localizedDescription)")
         }
+    }
+
+    func updateSubtitle(_ subtitle: String) {
+        self.subtitle = subtitle
     }
 
     func send(_ command: String) {
@@ -207,12 +211,40 @@ final class GlobalSessionManager: ObservableObject {
         sourceName: String,
         pod: KubernetesPod
     ) {
-        let session = addSession(
+        let session = prepareKubernetesSession(
             kind: .kubernetesLogs,
-            title: "\(sourceName) · 日志",
-            subtitle: "\(namespace) / \(pod.name)"
+            namespace: namespace,
+            sourceName: sourceName
+        )
+        startKubernetesLogs(
+            session,
+            cluster: cluster,
+            namespace: namespace,
+            pod: pod
+        )
+    }
+
+    func prepareKubernetesSession(
+        kind: SessionKind,
+        namespace: String,
+        sourceName: String
+    ) -> CommandSession {
+        let session = addSession(
+            kind: kind,
+            title: kind == .kubernetesLogs ? "\(sourceName) · 日志" : "\(sourceName) · Shell",
+            subtitle: "\(namespace) / 正在获取 Pod…"
         )
         select(session)
+        return session
+    }
+
+    func startKubernetesLogs(
+        _ session: CommandSession,
+        cluster: KubernetesClusterProfile,
+        namespace: String,
+        pod: KubernetesPod
+    ) {
+        session.updateSubtitle("\(namespace) / \(pod.name)")
         Task {
             do {
                 try await TeleportClient.ensureReady(cluster)
@@ -223,7 +255,7 @@ final class GlobalSessionManager: ObservableObject {
                         namespace: namespace,
                         podName: pod.name
                     ),
-                    environment: KubectlRunner.kubectlEnvironment,
+                    environment: KubernetesCommandBuilder.environment(for: cluster),
                     pseudoTerminal: false
                 )
             } catch {
@@ -238,12 +270,26 @@ final class GlobalSessionManager: ObservableObject {
         sourceName: String,
         pod: KubernetesPod
     ) {
-        let session = addSession(
+        let session = prepareKubernetesSession(
             kind: .kubernetesShell,
-            title: "\(sourceName) · Shell",
-            subtitle: "\(namespace) / \(pod.name)"
+            namespace: namespace,
+            sourceName: sourceName
         )
-        select(session)
+        startKubernetesShell(
+            session,
+            cluster: cluster,
+            namespace: namespace,
+            pod: pod
+        )
+    }
+
+    func startKubernetesShell(
+        _ session: CommandSession,
+        cluster: KubernetesClusterProfile,
+        namespace: String,
+        pod: KubernetesPod
+    ) {
+        session.updateSubtitle("\(namespace) / \(pod.name)")
         Task {
             do {
                 let shell = try await KubernetesClient.availableShell(
@@ -260,7 +306,7 @@ final class GlobalSessionManager: ObservableObject {
                             podName: pod.name,
                             shell: shell
                         ),
-                    environment: KubectlRunner.kubectlEnvironment,
+                    environment: KubernetesCommandBuilder.environment(for: cluster),
                     pseudoTerminal: false
                 )
             } catch {

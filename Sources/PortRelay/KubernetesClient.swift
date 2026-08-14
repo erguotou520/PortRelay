@@ -9,15 +9,38 @@ enum KubernetesCommandBuilder {
         return arguments
     }
 
+    static func baseArguments(cluster: KubernetesClusterProfile) -> [String] {
+        if cluster.configSource == .teleport {
+            return [
+                "tsh",
+                "--proxy=\(TeleportClient.normalizeProxy(cluster.teleportProxy))",
+                "--user=\(cluster.teleportUsername)",
+                "kubectl"
+            ]
+        }
+        return baseArguments(
+            kubeconfigPath: cluster.kubeconfigPath,
+            contextName: cluster.contextName
+        )
+    }
+
+    static func environment(for cluster: KubernetesClusterProfile) -> [String: String] {
+        var environment = KubectlRunner.kubectlEnvironment
+        if cluster.configSource == .teleport {
+            environment.removeValue(forKey: "KUBECONFIG")
+        }
+        return environment
+    }
+
     static func portForwardArguments(
         mapping: KubernetesPortMapping,
         cluster: KubernetesClusterProfile
     ) -> [String] {
-        baseArguments(kubeconfigPath: cluster.kubeconfigPath, contextName: cluster.contextName) + [
-            "--namespace", mapping.namespace,
+        baseArguments(cluster: cluster) + [
             "port-forward",
             "\(mapping.resourceKind.kubectlName)/\(mapping.resourceName)",
             "\(mapping.localPort):\(mapping.remotePort)",
+            "--namespace", mapping.namespace,
             "--address", mapping.localHost
         ]
     }
@@ -27,9 +50,8 @@ enum KubernetesCommandBuilder {
         namespace: String,
         podName: String
     ) -> [String] {
-        baseArguments(kubeconfigPath: cluster.kubeconfigPath, contextName: cluster.contextName) + [
-            "--namespace", namespace,
-            "logs", "pod/\(podName)",
+        baseArguments(cluster: cluster) + [
+            "logs", "pod/\(podName)", "--namespace", namespace,
             "--follow", "--tail=500", "--timestamps=true"
         ]
     }
@@ -41,12 +63,9 @@ enum KubernetesCommandBuilder {
         shell: String,
         interactive: Bool = true
     ) -> [String] {
-        var arguments = baseArguments(
-            kubeconfigPath: cluster.kubeconfigPath,
-            contextName: cluster.contextName
-        ) + ["--namespace", namespace, "exec"]
+        var arguments = baseArguments(cluster: cluster) + ["exec"]
         if interactive { arguments += ["-i", "-t"] }
-        arguments += ["pod/\(podName)", "--", shell]
+        arguments += ["pod/\(podName)", "--namespace", namespace, "--", shell]
         if !interactive { arguments += ["-c", "exit 0"] }
         return arguments
     }
@@ -67,10 +86,8 @@ enum KubernetesClient {
     static func namespaces(cluster: KubernetesClusterProfile) async throws -> [String] {
         try await TeleportClient.ensureReady(cluster)
         let data = try await KubectlRunner.run(
-            KubernetesCommandBuilder.baseArguments(
-                kubeconfigPath: cluster.kubeconfigPath,
-                contextName: cluster.contextName
-            ) + ["--request-timeout=15s", "get", "namespaces", "-o", "json"]
+            KubernetesCommandBuilder.baseArguments(cluster: cluster)
+                + ["get", "namespaces", "--request-timeout=15s", "-o", "json"]
         )
         return try parseNamespaces(data)
     }
@@ -85,12 +102,9 @@ enum KubernetesClient {
     static func ports(cluster: KubernetesClusterProfile, namespace: String) async throws -> [KubernetesPort] {
         try await TeleportClient.ensureReady(cluster)
         let data = try await KubectlRunner.run(
-            KubernetesCommandBuilder.baseArguments(
-                kubeconfigPath: cluster.kubeconfigPath,
-                contextName: cluster.contextName
-            ) + [
-                "--request-timeout=15s", "--namespace", namespace,
-                "get", "services,deployments,pods", "-o", "json"
+            KubernetesCommandBuilder.baseArguments(cluster: cluster) + [
+                "get", "services,deployments,pods",
+                "--request-timeout=15s", "--namespace", namespace, "-o", "json"
             ]
         )
         return try parsePorts(data)
@@ -102,16 +116,19 @@ enum KubernetesClient {
         deployment: String
     ) async throws -> [KubernetesPod] {
         try await TeleportClient.ensureReady(cluster)
-        let base = KubernetesCommandBuilder.baseArguments(
-            kubeconfigPath: cluster.kubeconfigPath,
-            contextName: cluster.contextName
-        ) + ["--request-timeout=15s", "--namespace", namespace]
+        let base = KubernetesCommandBuilder.baseArguments(cluster: cluster)
         let deploymentData = try await KubectlRunner.run(
-            base + ["get", "deployment", deployment, "-o", "json"]
+            base + [
+                "get", "deployment", deployment,
+                "--request-timeout=15s", "--namespace", namespace, "-o", "json"
+            ]
         )
         let selector = try parseDeploymentSelector(deploymentData)
         let podData = try await KubectlRunner.run(
-            base + ["get", "pods", "--selector", selector, "-o", "json"]
+            base + [
+                "get", "pods", "--selector", selector,
+                "--request-timeout=15s", "--namespace", namespace, "-o", "json"
+            ]
         )
         return try parsePods(podData)
     }
@@ -250,48 +267,65 @@ enum KubernetesClient {
 enum KubectlRunner {
     static func run(_ arguments: [String]) async throws -> Data {
         try await Task.detached(priority: .userInitiated) {
-            let temporaryDirectory = FileManager.default.temporaryDirectory
-                .appendingPathComponent("PortRelay-\(UUID().uuidString)", isDirectory: true)
-            try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
-            defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
-
-            let outputURL = temporaryDirectory.appendingPathComponent("stdout")
-            let errorURL = temporaryDirectory.appendingPathComponent("stderr")
-            FileManager.default.createFile(atPath: outputURL.path, contents: nil)
-            FileManager.default.createFile(atPath: errorURL.path, contents: nil)
-            let outputHandle = try FileHandle(forWritingTo: outputURL)
-            let errorHandle = try FileHandle(forWritingTo: errorURL)
-            defer {
-                try? outputHandle.close()
-                try? errorHandle.close()
+            var failedAttempt = 0
+            while true {
+                do {
+                    return try runOnce(arguments)
+                } catch {
+                    guard arguments.first == "tsh",
+                          failedAttempt < TeleportRetryPolicy.retryDelays.count,
+                          TeleportRetryPolicy.shouldRetry(error.localizedDescription) else { throw error }
+                    try await Task.sleep(for: TeleportRetryPolicy.retryDelays[failedAttempt])
+                    failedAttempt += 1
+                }
             }
-
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = arguments
-            process.environment = kubectlEnvironment
-            process.standardInput = FileHandle.nullDevice
-            process.standardOutput = outputHandle
-            process.standardError = errorHandle
-
-            do {
-                try process.run()
-            } catch {
-                throw ValidationError.message("无法启动 kubectl：\(error.localizedDescription)")
-            }
-            process.waitUntilExit()
-            try? outputHandle.synchronize()
-            try? errorHandle.synchronize()
-
-            let output = (try? Data(contentsOf: outputURL)) ?? Data()
-            let error = (try? Data(contentsOf: errorURL)) ?? Data()
-            guard process.terminationStatus == 0 else {
-                let message = String(data: error, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                throw ValidationError.message(message?.isEmpty == false ? message! : "kubectl 执行失败")
-            }
-            return output
         }.value
+    }
+
+    private static func runOnce(_ arguments: [String]) throws -> Data {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PortRelay-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let outputURL = temporaryDirectory.appendingPathComponent("stdout")
+        let errorURL = temporaryDirectory.appendingPathComponent("stderr")
+        FileManager.default.createFile(atPath: outputURL.path, contents: nil)
+        FileManager.default.createFile(atPath: errorURL.path, contents: nil)
+        let outputHandle = try FileHandle(forWritingTo: outputURL)
+        let errorHandle = try FileHandle(forWritingTo: errorURL)
+        defer {
+            try? outputHandle.close()
+            try? errorHandle.close()
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = arguments
+        var environment = kubectlEnvironment
+        if arguments.first == "tsh" {
+            environment.removeValue(forKey: "KUBECONFIG")
+        }
+        process.environment = environment
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = outputHandle
+        process.standardError = errorHandle
+        do {
+            try process.run()
+        } catch {
+            throw ValidationError.message("无法启动 kubectl：\(error.localizedDescription)")
+        }
+        process.waitUntilExit()
+        try? outputHandle.synchronize()
+        try? errorHandle.synchronize()
+
+        let output = (try? Data(contentsOf: outputURL)) ?? Data()
+        let error = (try? Data(contentsOf: errorURL)) ?? Data()
+        guard process.terminationStatus == 0 else {
+            let message = CommandOutputText.cleaned(String(decoding: error, as: UTF8.self))
+            throw ValidationError.message(message.isEmpty ? "kubectl 执行失败" : message)
+        }
+        return output
     }
 
     static var kubectlEnvironment: [String: String] {

@@ -142,16 +142,38 @@ private struct CommandSessionView: View {
             Divider()
 
             if session.kind.isInteractive {
-                InteractiveTerminalView(session: session)
-                    .id(session.id)
+                ZStack {
+                    InteractiveTerminalView(session: session)
+                        .id(session.id)
+                    if session.status == .connecting, session.output.isEmpty {
+                        connectionPlaceholder
+                    }
+                }
             } else {
-                LogOutputView(
-                    output: displayedOutput,
-                    placeholder: placeholder,
-                    autoScroll: searchText.isEmpty
-                )
+                ZStack {
+                    LogOutputView(
+                        output: displayedOutput,
+                        placeholder: placeholder,
+                        autoScroll: searchText.isEmpty
+                    )
+                    if session.status == .connecting, session.output.isEmpty {
+                        connectionPlaceholder
+                    }
+                }
             }
         }
+    }
+
+    private var connectionPlaceholder: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+            Text("正在连接 Pod，请稍候…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .textBackgroundColor))
+        .allowsHitTesting(false)
     }
 
     private var placeholder: String {

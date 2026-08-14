@@ -66,6 +66,67 @@ final class KubernetesTests: XCTestCase {
         XCTAssertEqual(try TeleportClient.parseKubeClusterNames(data), ["prod", "staging"])
     }
 
+    func testTeleportSelectedKubeClusterParsing() {
+        let data = Data(#"[{"kube_cluster_name":"prod","selected":false},{"kube_cluster_name":"staging","selected":true}]"#.utf8)
+
+        XCTAssertEqual(TeleportClient.parseSelectedKubeCluster(data), "staging")
+    }
+
+    func testTeleportRetryPolicyOnlyRetriesTransientConnections() {
+        XCTAssertTrue(TeleportRetryPolicy.shouldRetry("read: connection reset by peer"))
+        XCTAssertTrue(TeleportRetryPolicy.shouldRetry("unexpected EOF"))
+        XCTAssertTrue(TeleportRetryPolicy.shouldRetry("Error from server (InternalError): Internal Server Error"))
+        XCTAssertTrue(TeleportRetryPolicy.shouldRetry("Client.Timeout exceeded while awaiting headers"))
+        XCTAssertFalse(TeleportRetryPolicy.shouldRetry("Access denied"))
+    }
+
+    func testCommandOutputCleaningRemovesANSIForCopying() {
+        XCTAssertEqual(
+            CommandOutputText.cleaned("\u{001B}[31mERROR:\u{001B}[0m connection reset\n"),
+            "ERROR: connection reset"
+        )
+    }
+
+    func testTeleportRunnerRetriesOneTransientFailure() async throws {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PortRelay-retry-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
+        let command = """
+        if test -f '\(marker.path)'; then
+          printf success
+          exit 0
+        fi
+        touch '\(marker.path)'
+        printf 'connection reset by peer' >&2
+        exit 1
+        """
+
+        let output = try await TeleportRunner.run(["/bin/sh", "-c", command])
+
+        XCTAssertEqual(String(decoding: output, as: UTF8.self), "success")
+    }
+
+    func testTeleportRunnerRetriesMultipleTransientFailures() async throws {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PortRelay-retry-count-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
+        let command = """
+        count=0
+        if test -f '\(marker.path)'; then count=$(cat '\(marker.path)'); fi
+        count=$((count + 1))
+        printf '%s' "$count" > '\(marker.path)'
+        if test "$count" -lt 3; then
+          printf 'Internal Server Error' >&2
+          exit 1
+        fi
+        printf success
+        """
+
+        let output = try await TeleportRunner.run(["/bin/sh", "-c", command])
+
+        XCTAssertEqual(String(decoding: output, as: UTF8.self), "success")
+    }
+
     func testTeleportProxyNormalizationRemovesURLDecoration() {
         XCTAssertEqual(
             TeleportClient.normalizeProxy(" https://teleport.example.com:443/ "),
@@ -168,9 +229,56 @@ final class KubernetesTests: XCTestCase {
         XCTAssertEqual(arguments, [
             "kubectl", "--kubeconfig", ("~/.kube/config" as NSString).expandingTildeInPath,
             "--context", "production-admin",
-            "--namespace", "payments",
-            "port-forward", "service/api", "8082:80", "--address", "127.0.0.1"
+            "port-forward", "service/api", "8082:80",
+            "--namespace", "payments", "--address", "127.0.0.1"
         ])
+    }
+
+    func testTeleportKubernetesCommandsUseTshKubectlWithoutKubeconfig() {
+        let cluster = KubernetesClusterProfile(
+            id: UUID(),
+            name: "Teleport Production",
+            configSource: .teleport,
+            kubeconfigPath: "/tmp/teleport-kubeconfig",
+            contextName: "portrelay-context",
+            teleportProxy: "teleport.example.com:443",
+            teleportUsername: "alice",
+            teleportKubeCluster: "production"
+        )
+        let mapping = KubernetesPortMapping(
+            id: UUID(),
+            clusterID: cluster.id,
+            namespace: "payments",
+            resourceKind: .service,
+            resourceName: "api",
+            portName: "http",
+            remotePort: 80,
+            localHost: "127.0.0.1",
+            localPort: 8082
+        )
+
+        let prefix = [
+            "tsh", "--proxy=teleport.example.com:443", "--user=alice", "kubectl"
+        ]
+        let portForward = KubernetesCommandBuilder.portForwardArguments(
+            mapping: mapping,
+            cluster: cluster
+        )
+
+        XCTAssertEqual(Array(portForward.prefix(4)), prefix)
+        XCTAssertEqual(Array(portForward.dropFirst(4).prefix(3)), [
+            "port-forward", "service/api", "8082:80"
+        ])
+        XCTAssertFalse(portForward.contains("--kubeconfig"))
+        XCTAssertFalse(portForward.contains("--context"))
+        XCTAssertEqual(
+            Array(KubernetesCommandBuilder.logsArguments(
+                cluster: cluster,
+                namespace: "payments",
+                podName: "api-123"
+            ).dropFirst(4).prefix(2)),
+            ["logs", "pod/api-123"]
+        )
     }
 
     func testParsesServiceDeploymentAndPodPorts() throws {
@@ -419,7 +527,7 @@ final class KubernetesTests: XCTestCase {
                 namespace: "payments",
                 podName: "api-123"
             ).suffix(7),
-            ["--namespace", "payments", "logs", "pod/api-123", "--follow", "--tail=500", "--timestamps=true"]
+            ["logs", "pod/api-123", "--namespace", "payments", "--follow", "--tail=500", "--timestamps=true"]
         )
         XCTAssertEqual(
             KubernetesCommandBuilder.shellArguments(
@@ -428,7 +536,7 @@ final class KubernetesTests: XCTestCase {
                 podName: "api-123",
                 shell: "/bin/bash"
             ).suffix(8),
-            ["--namespace", "payments", "exec", "-i", "-t", "pod/api-123", "--", "/bin/bash"]
+            ["exec", "-i", "-t", "pod/api-123", "--namespace", "payments", "--", "/bin/bash"]
         )
     }
 

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct KubernetesWorkspaceView: View {
@@ -6,6 +7,7 @@ struct KubernetesWorkspaceView: View {
     @State private var clusterSelection = Set<UUID>()
     @State private var namespaceSelection: String?
     @State private var namespaces: [String] = []
+    @State private var namespacesClusterID: UUID?
     @State private var namespaceError: String?
     @State private var isLoadingNamespaces = false
     @State private var showingAddCluster = false
@@ -165,18 +167,32 @@ struct KubernetesWorkspaceView: View {
                     Label("无法读取 Namespace", systemImage: "exclamationmark.triangle")
                 } description: {
                     Text(namespaceError)
+                        .textSelection(.enabled)
                 } actions: {
-                    Button("重试") { Task { await loadNamespaces() } }
+                    HStack {
+                        Button("重试") { Task { await loadNamespaces() } }
+                        Button("复制错误") { copyError(namespaceError) }
+                    }
                 }
             } else {
                 VStack(spacing: 0) {
                     if let namespaceError {
-                        Label(namespaceError, systemImage: "exclamationmark.triangle")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .lineLimit(2)
-                            .padding(10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle")
+                            Text(namespaceError)
+                                .textSelection(.enabled)
+                                .lineLimit(2)
+                            Spacer(minLength: 0)
+                            Button { copyError(namespaceError) } label: {
+                                Image(systemName: "doc.on.doc")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("复制完整错误信息")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         Divider()
                     }
                     List(selection: $namespaceSelection) {
@@ -214,9 +230,15 @@ struct KubernetesWorkspaceView: View {
     private func loadNamespaces() async {
         guard let cluster = store.selectedKubernetesCluster else {
             namespaces = []
+            namespacesClusterID = nil
             namespaceSelection = nil
             store.selectedNamespace = nil
             return
+        }
+        if namespacesClusterID != cluster.id {
+            namespaces = []
+            namespaceSelection = nil
+            namespacesClusterID = cluster.id
         }
         isLoadingNamespaces = true
         namespaceError = nil
@@ -233,13 +255,20 @@ struct KubernetesWorkspaceView: View {
             store.selectedNamespace = preferred
         } catch {
             guard store.selectedKubernetesClusterID == cluster.id else { return }
-            namespaces = Array(Set(store.kubernetesMappings(clusterID: cluster.id).map(\.namespace))).sorted()
+            let saved = store.kubernetesMappings(clusterID: cluster.id).map(\.namespace)
+            namespaces = Array(Set(namespaces + saved)).sorted()
             namespaceSelection = store.selectedNamespace.flatMap { namespaces.contains($0) ? $0 : nil }
                 ?? namespaces.first
             store.selectedNamespace = namespaceSelection
             namespaceError = error.localizedDescription
         }
         isLoadingNamespaces = false
+    }
+
+    private func copyError(_ message: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(message, forType: .string)
     }
 
     private var singleDeletingClusterName: String {
@@ -408,9 +437,15 @@ private struct KubernetesPortsView: View {
             .environmentObject(store)
         }
         .sheet(item: $podRequest) { request in
-            KubernetesPodChooser(request: request) { pod in
-                openSession(request.action, sourceName: request.deployment, pod: pod)
-            }
+            KubernetesPodChooser(
+                request: request,
+                onSelect: { pod in
+                    startSession(request.action, session: request.session, pod: pod)
+                },
+                onCancel: {
+                    store.sessionManager.close(request.session)
+                }
+            )
         }
         .confirmationDialog(
             deletingMappingIDs.count > 1
@@ -589,6 +624,11 @@ private struct KubernetesPortsView: View {
     }
 
     private func prepareDeploymentSession(_ action: KubernetesSessionAction, deployment: String) {
+        let session = store.sessionManager.prepareKubernetesSession(
+            kind: action.sessionKind,
+            namespace: namespace,
+            sourceName: deployment
+        )
         loadingDeploymentName = deployment
         Task {
             defer { loadingDeploymentName = nil }
@@ -600,22 +640,23 @@ private struct KubernetesPortsView: View {
                 )
                 let runningPods = pods.filter(\.isRunning)
                 guard !runningPods.isEmpty else {
-                    store.alertMessage = pods.isEmpty
+                    session.fail(pods.isEmpty
                         ? "Deployment“\(deployment)”当前没有 Pod"
-                        : "Deployment“\(deployment)”当前没有运行中的 Pod"
+                        : "Deployment“\(deployment)”当前没有运行中的 Pod")
                     return
                 }
                 if runningPods.count == 1, let pod = runningPods.first {
-                    openSession(action, sourceName: deployment, pod: pod)
+                    startSession(action, session: session, pod: pod)
                 } else {
                     podRequest = KubernetesPodRequest(
                         deployment: deployment,
                         pods: runningPods,
-                        action: action
+                        action: action,
+                        session: session
                     )
                 }
             } catch {
-                store.alertMessage = "读取 Deployment Pod 失败：\(error.localizedDescription)"
+                session.fail("读取 Deployment Pod 失败：\(error.localizedDescription)")
             }
         }
     }
@@ -648,6 +689,29 @@ private struct KubernetesPortsView: View {
         }
     }
 
+    private func startSession(
+        _ action: KubernetesSessionAction,
+        session: CommandSession,
+        pod: KubernetesPod
+    ) {
+        switch action {
+        case .logs:
+            store.sessionManager.startKubernetesLogs(
+                session,
+                cluster: cluster,
+                namespace: namespace,
+                pod: pod
+            )
+        case .shell:
+            store.sessionManager.startKubernetesShell(
+                session,
+                cluster: cluster,
+                namespace: namespace,
+                pod: pod
+            )
+        }
+    }
+
     @MainActor
     private func loadPorts() async {
         isLoading = true
@@ -667,6 +731,7 @@ private enum KubernetesSessionAction {
     case shell
 
     var title: String { self == .logs ? "查看日志" : "Shell 连接" }
+    var sessionKind: SessionKind { self == .logs ? .kubernetesLogs : .kubernetesShell }
 }
 
 private struct KubernetesPodRequest: Identifiable {
@@ -674,13 +739,16 @@ private struct KubernetesPodRequest: Identifiable {
     let deployment: String
     let pods: [KubernetesPod]
     let action: KubernetesSessionAction
+    let session: CommandSession
 }
 
 private struct KubernetesPodChooser: View {
     @Environment(\.dismiss) private var dismiss
     let request: KubernetesPodRequest
     let onSelect: (KubernetesPod) -> Void
+    let onCancel: () -> Void
     @State private var selectedPodName: String?
+    @State private var didComplete = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -708,11 +776,17 @@ private struct KubernetesPodChooser: View {
             Divider()
             HStack {
                 Spacer()
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("取消") {
+                    didComplete = true
+                    onCancel()
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
                 Button(request.action.title) {
                     guard let pod = request.pods.first(where: { $0.name == selectedPodName }) else { return }
-                    dismiss()
+                    didComplete = true
                     onSelect(pod)
+                    dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(selectedPodName == nil)
@@ -721,6 +795,9 @@ private struct KubernetesPodChooser: View {
         }
         .frame(width: 560, height: 380)
         .onAppear { selectedPodName = request.pods.first?.name }
+        .onDisappear {
+            if !didComplete { onCancel() }
+        }
     }
 }
 

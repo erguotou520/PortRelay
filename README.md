@@ -16,6 +16,7 @@ PortRelay 是一个原生 SwiftUI macOS 端口映射应用，同时提供 SSH �
 - 顶部可切换到 Kubernetes 模式，以“集群 → Namespace → 端口”三栏浏览 Service、Deployment 和 Pod。
 - Kubernetes 集群支持选择本地 kubeconfig、直接粘贴 YAML，或通过 Teleport 登录后选择有权限的集群。
 - Teleport 模式将密码保存在 macOS 钥匙串，支持可选 OTP MFA；无 MFA 时会定期自动续期，MFA 凭证到期后可从集群右键菜单重新登录。
+- Teleport 模式通过 `tsh kubectl` 访问 Kubernetes，可兼容位于 Cloudflare、七层负载均衡或反向代理后的 Teleport Proxy。
 - 可将 Service/Deployment 声明的 TCP 端口映射到 `127.0.0.1` 或 `0.0.0.0`，并支持修改、删除、启动、停止和失败重试。
 - Kubernetes 映射会记住启用状态，应用重新打开后通过 `kubectl port-forward` 自动恢复。
 - Deployment 支持选择运行中的 Pod，流式查看并搜索日志，或自动使用 bash、降级到 sh 建立 Shell 会话。

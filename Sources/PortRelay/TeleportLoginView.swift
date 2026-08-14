@@ -34,8 +34,7 @@ struct TeleportLoginView: View {
                         .foregroundStyle(.secondary)
                 }
                 if let errorMessage {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
+                    CopyableErrorView(message: errorMessage)
                 }
             }
             .formStyle(.grouped)

@@ -26,7 +26,7 @@ final class KubernetesPortForwardManager: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = KubernetesCommandBuilder.portForwardArguments(mapping: mapping, cluster: cluster)
-        process.environment = KubectlRunner.kubectlEnvironment
+        process.environment = KubernetesCommandBuilder.environment(for: cluster)
         process.standardInput = FileHandle.nullDevice
 
         let outputPipe = Pipe()

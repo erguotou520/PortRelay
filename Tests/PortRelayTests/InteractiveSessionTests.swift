@@ -3,6 +3,23 @@ import XCTest
 
 final class InteractiveSessionTests: XCTestCase {
     @MainActor
+    func testPreparingKubernetesSessionImmediatelySelectsVisibleConnectingSession() {
+        let manager = GlobalSessionManager()
+
+        let session = manager.prepareKubernetesSession(
+            kind: .kubernetesLogs,
+            namespace: "production",
+            sourceName: "api"
+        )
+
+        XCTAssertEqual(manager.sessions.map(\.id), [session.id])
+        XCTAssertEqual(manager.selectedSessionID, session.id)
+        XCTAssertFalse(manager.isPanelCollapsed)
+        XCTAssertEqual(session.status, .connecting)
+        XCTAssertEqual(session.subtitle, "production / 正在获取 Pod…")
+    }
+
+    @MainActor
     func testPseudoTerminalAcceptsInputAndStreamsOutput() async throws {
         let session = CommandSession(kind: .sshShell, title: "Test", subtitle: "Local")
         session.start(
