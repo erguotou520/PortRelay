@@ -818,7 +818,7 @@ private struct KubernetesPortRow: View {
             }
 
             if item.mapping == nil {
-                Text("未配置").font(.caption).foregroundStyle(.secondary)
+                Text("未配置").foregroundStyle(.secondary)
                     .frame(width: 78, alignment: .leading)
             } else {
                 KubernetesStatusBadge(status: status).frame(width: 78, alignment: .leading)
@@ -862,7 +862,7 @@ private struct KubernetesStatusBadge: View {
     var body: some View {
         HStack(spacing: 6) {
             Circle().fill(color).frame(width: 7, height: 7)
-            Text(status.title).font(.caption)
+            Text(status.title)
         }
         .foregroundStyle(color)
     }
