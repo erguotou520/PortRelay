@@ -105,6 +105,10 @@ final class KubernetesPortForwardManager: ObservableObject {
         statuses[mappingID] = .stopped
     }
 
+    func markFailed(mappingID: UUID, message: String) {
+        statuses[mappingID] = .failed(message)
+    }
+
     func stopAll() {
         for id in Array(processes.keys) {
             stop(mappingID: id)

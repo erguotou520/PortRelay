@@ -106,6 +106,7 @@ struct PortMapping: Codable, Identifiable, Hashable {
 enum KubeConfigSource: String, Codable, CaseIterable, Identifiable {
     case localFile
     case embedded
+    case teleport
 
     var id: String { rawValue }
 
@@ -113,6 +114,7 @@ enum KubeConfigSource: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .localFile: "本地文件"
         case .embedded: "粘贴 YAML"
+        case .teleport: "Teleport"
         }
     }
 }
@@ -123,8 +125,57 @@ struct KubernetesClusterProfile: Codable, Identifiable, Hashable {
     var configSource: KubeConfigSource
     var kubeconfigPath: String
     var contextName: String
+    var teleportProxy: String
+    var teleportUsername: String
+    var teleportKubeCluster: String
+    var teleportRequiresMFA: Bool
 
-    var subtitle: String { contextName }
+    init(
+        id: UUID,
+        name: String,
+        configSource: KubeConfigSource,
+        kubeconfigPath: String,
+        contextName: String,
+        teleportProxy: String = "",
+        teleportUsername: String = "",
+        teleportKubeCluster: String = "",
+        teleportRequiresMFA: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.configSource = configSource
+        self.kubeconfigPath = kubeconfigPath
+        self.contextName = contextName
+        self.teleportProxy = teleportProxy
+        self.teleportUsername = teleportUsername
+        self.teleportKubeCluster = teleportKubeCluster
+        self.teleportRequiresMFA = teleportRequiresMFA
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, configSource, kubeconfigPath, contextName
+        case teleportProxy, teleportUsername, teleportKubeCluster, teleportRequiresMFA
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        configSource = try container.decode(KubeConfigSource.self, forKey: .configSource)
+        kubeconfigPath = try container.decode(String.self, forKey: .kubeconfigPath)
+        contextName = try container.decode(String.self, forKey: .contextName)
+        teleportProxy = try container.decodeIfPresent(String.self, forKey: .teleportProxy) ?? ""
+        teleportUsername = try container.decodeIfPresent(String.self, forKey: .teleportUsername) ?? ""
+        teleportKubeCluster = try container.decodeIfPresent(String.self, forKey: .teleportKubeCluster) ?? ""
+        teleportRequiresMFA = try container.decodeIfPresent(Bool.self, forKey: .teleportRequiresMFA) ?? false
+    }
+
+    var subtitle: String {
+        if configSource == .teleport {
+            return "\(teleportUsername)@\(teleportProxy) · \(teleportKubeCluster)"
+        }
+        return contextName
+    }
 }
 
 enum KubernetesResourceKind: String, Codable, CaseIterable, Identifiable {

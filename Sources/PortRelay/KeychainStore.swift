@@ -6,7 +6,34 @@ enum KeychainStore {
     static let service = "com.erguotou.PortForward.password"
 
     static func setPassword(_ password: String, for serverID: UUID) throws {
-        let account = serverID.uuidString
+        try setPassword(password, account: serverID.uuidString)
+    }
+
+    static func hasPassword(for serverID: UUID) -> Bool {
+        hasPassword(account: serverID.uuidString)
+    }
+
+    static func deletePassword(for serverID: UUID) {
+        deletePassword(account: serverID.uuidString)
+    }
+
+    static func setTeleportPassword(_ password: String, for clusterID: UUID) throws {
+        try setPassword(password, account: "teleport-\(clusterID.uuidString)")
+    }
+
+    static func teleportPassword(for clusterID: UUID) -> String? {
+        password(account: "teleport-\(clusterID.uuidString)")
+    }
+
+    static func hasTeleportPassword(for clusterID: UUID) -> Bool {
+        hasPassword(account: "teleport-\(clusterID.uuidString)")
+    }
+
+    static func deleteTeleportPassword(for clusterID: UUID) {
+        deletePassword(account: "teleport-\(clusterID.uuidString)")
+    }
+
+    private static func setPassword(_ password: String, account: String) throws {
         let data = Data(password.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -22,22 +49,36 @@ enum KeychainStore {
         }
     }
 
-    static func hasPassword(for serverID: UUID) -> Bool {
+    private static func password(account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: serverID.uuidString,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func hasPassword(account: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
             kSecReturnData as String: false,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 
-    static func deletePassword(for serverID: UUID) {
+    private static func deletePassword(account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: serverID.uuidString
+            kSecAttrAccount as String: account
         ]
         SecItemDelete(query as CFDictionary)
     }

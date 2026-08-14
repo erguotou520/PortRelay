@@ -11,6 +11,118 @@ final class KubernetesTests: XCTestCase {
         XCTAssertTrue(configuration.kubernetesMappings.isEmpty)
     }
 
+    func testLegacyKubernetesClusterDefaultsTeleportFields() throws {
+        let id = UUID()
+        let data = Data("""
+        {
+          "id": "\(id.uuidString)",
+          "name": "Production",
+          "configSource": "localFile",
+          "kubeconfigPath": "/tmp/config",
+          "contextName": "production"
+        }
+        """.utf8)
+
+        let cluster = try JSONDecoder().decode(KubernetesClusterProfile.self, from: data)
+
+        XCTAssertEqual(cluster.teleportProxy, "")
+        XCTAssertEqual(cluster.teleportUsername, "")
+        XCTAssertEqual(cluster.teleportKubeCluster, "")
+        XCTAssertFalse(cluster.teleportRequiresMFA)
+    }
+
+    func testTeleportLoginArgumentsSelectLocalAuthAndOptionalOTP() {
+        XCTAssertEqual(
+            TeleportCommandBuilder.loginArguments(
+                proxy: "teleport.example.com:443",
+                username: "alice",
+                requiresMFA: true
+            ),
+            [
+                "tsh", "login", "--proxy=teleport.example.com:443", "--user=alice",
+                "--auth=local", "--mfa-mode=otp", "--browser=none"
+            ]
+        )
+        XCTAssertTrue(
+            TeleportCommandBuilder.loginArguments(
+                proxy: "teleport.example.com:443",
+                username: "alice",
+                requiresMFA: false
+            ).contains("--mfa-mode=auto")
+        )
+    }
+
+    func testTeleportCredentialValidityUsesValidUntil() {
+        let data = Data(#"{"active":{"valid_until":"2026-08-14T12:30:00+08:00"},"profiles":[]}"#.utf8)
+        let now = ISO8601DateFormatter().date(from: "2026-08-14T04:00:00Z")!
+
+        XCTAssertTrue(TeleportClient.isCredentialValid(data, now: now, minimumValidity: 20 * 60))
+        XCTAssertFalse(TeleportClient.isCredentialValid(data, now: now, minimumValidity: 31 * 60))
+    }
+
+    func testTeleportKubeClustersParseSupportedJSONShapes() throws {
+        let data = Data(#"[{"kube_cluster_name":"prod"},{"metadata":{"name":"staging"}},{"name":"prod"}]"#.utf8)
+
+        XCTAssertEqual(try TeleportClient.parseKubeClusterNames(data), ["prod", "staging"])
+    }
+
+    func testTeleportProxyNormalizationRemovesURLDecoration() {
+        XCTAssertEqual(
+            TeleportClient.normalizeProxy(" https://teleport.example.com:443/ "),
+            "teleport.example.com:443"
+        )
+    }
+
+    func testTeleportLoginDriverSuppliesPasswordAndOTP() async throws {
+        let command = """
+        printf 'Enter password for Teleport user alice:'
+        IFS= read -r password
+        printf 'Enter an OTP code from a device:'
+        IFS= read -r otp
+        test "$password" = 'secret value' && test "$otp" = '123456'
+        """
+
+        try await TeleportRunner.login(
+            arguments: ["/bin/sh", "-c", command],
+            password: "secret value",
+            mfaCode: "123456"
+        )
+    }
+
+    func testTeleportLoginDriverSupportsPasswordOnly() async throws {
+        let command = """
+        printf 'Enter password for Teleport user alice:'
+        IFS= read -r password
+        test "$password" = 'secret value'
+        """
+
+        try await TeleportRunner.login(
+            arguments: ["/bin/sh", "-c", command],
+            password: "secret value",
+            mfaCode: nil
+        )
+    }
+
+    func testTeleportLoginDriverReportsRequiredMFA() async {
+        let command = """
+        printf 'Enter password for Teleport user alice:'
+        IFS= read -r password
+        printf 'Enter an OTP code from a device:'
+        IFS= read -r otp
+        """
+
+        do {
+            try await TeleportRunner.login(
+                arguments: ["/bin/sh", "-c", command],
+                password: "secret value",
+                mfaCode: nil
+            )
+            XCTFail("Expected MFA validation error")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("需要 MFA"))
+        }
+    }
+
     func testKubernetesMappingLegacyEnabledStateDefaultsToFalse() throws {
         let json = """
         {

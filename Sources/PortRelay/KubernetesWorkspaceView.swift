@@ -10,6 +10,7 @@ struct KubernetesWorkspaceView: View {
     @State private var isLoadingNamespaces = false
     @State private var showingAddCluster = false
     @State private var editingCluster: KubernetesClusterProfile?
+    @State private var reauthenticatingCluster: KubernetesClusterProfile?
     @State private var deletingClusterIDs = Set<UUID>()
 
     var body: some View {
@@ -44,6 +45,9 @@ struct KubernetesWorkspaceView: View {
         }
         .sheet(item: $editingCluster) { cluster in
             KubernetesClusterEditorView(existing: cluster).environmentObject(store)
+        }
+        .sheet(item: $reauthenticatingCluster) { cluster in
+            TeleportLoginView(cluster: cluster)
         }
         .confirmationDialog(
             deletingClusterIDs.count > 1
@@ -104,6 +108,9 @@ struct KubernetesWorkspaceView: View {
                         .tag(cluster.id)
                         .contextMenu {
                             Button("修改") { editingCluster = cluster }
+                            if cluster.configSource == .teleport {
+                                Button("重新登录") { reauthenticatingCluster = cluster }
+                            }
                             Divider()
                             Button(deleteClusterTitle(for: cluster), role: .destructive) {
                                 deletingClusterIDs = deletionIDs(for: cluster)
@@ -268,7 +275,7 @@ private struct KubernetesClusterRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "shippingbox")
+            Image(systemName: cluster.configSource == .teleport ? "network.badge.shield.half.filled" : "shippingbox")
                 .foregroundStyle(.purple)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {

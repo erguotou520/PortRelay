@@ -33,6 +33,12 @@ final class AppStore: ObservableObject {
         reloadSSHConfig()
         restoreEnabledMappings()
         restoreEnabledKubernetesMappings()
+        Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(300))
+                await self?.refreshTeleportCredentials()
+            }
+        }
     }
 
     var selectedServer: ServerProfile? {
@@ -304,7 +310,8 @@ final class AppStore: ObservableObject {
 
     func saveKubernetesCluster(
         _ cluster: KubernetesClusterProfile,
-        kubeconfigContents: String
+        kubeconfigContents: String,
+        teleportPassword: String = ""
     ) throws {
         var cluster = cluster
         cluster.name = cluster.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -313,7 +320,22 @@ final class AppStore: ObservableObject {
         guard !cluster.contextName.isEmpty else { throw ValidationError.message("请选择 Context") }
 
         let previous = kubernetesClusters.first { $0.id == cluster.id }
-        if cluster.configSource == .embedded {
+        if cluster.configSource == .teleport {
+            cluster.teleportProxy = TeleportClient.normalizeProxy(cluster.teleportProxy)
+            cluster.teleportUsername = cluster.teleportUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+            cluster.teleportKubeCluster = cluster.teleportKubeCluster.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cluster.teleportProxy.isEmpty else { throw ValidationError.message("请输入 Teleport 地址") }
+            guard !cluster.teleportUsername.isEmpty else { throw ValidationError.message("请输入 Teleport 账户") }
+            guard !cluster.teleportKubeCluster.isEmpty else {
+                throw ValidationError.message("请选择 Teleport Kubernetes 集群")
+            }
+            if !teleportPassword.isEmpty {
+                try KeychainStore.setTeleportPassword(teleportPassword, for: cluster.id)
+            } else if !KeychainStore.hasTeleportPassword(for: cluster.id) {
+                throw ValidationError.message("请输入 Teleport 密码")
+            }
+            cluster.kubeconfigPath = try ConfigurationStore.prepareTeleportKubeconfig(clusterID: cluster.id)
+        } else if cluster.configSource == .embedded {
             if !kubeconfigContents.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 cluster.kubeconfigPath = try ConfigurationStore.saveKubeconfig(
                     kubeconfigContents,
@@ -327,9 +349,12 @@ final class AppStore: ObservableObject {
             guard FileManager.default.fileExists(atPath: cluster.kubeconfigPath) else {
                 throw ValidationError.message("找不到 kubeconfig：\(cluster.kubeconfigPath)")
             }
-            if previous?.configSource == .embedded {
+            if previous?.configSource == .embedded || previous?.configSource == .teleport {
                 ConfigurationStore.deleteKubeconfig(for: cluster.id)
             }
+        }
+        if cluster.configSource != .teleport, previous?.configSource == .teleport {
+            KeychainStore.deleteTeleportPassword(for: cluster.id)
         }
 
         if let index = kubernetesClusters.firstIndex(where: { $0.id == cluster.id }) {
@@ -349,6 +374,7 @@ final class AppStore: ObservableObject {
         guard !ids.isEmpty else { return }
         for id in ids {
             stopKubernetesMappings(for: id)
+            KeychainStore.deleteTeleportPassword(for: id)
             ConfigurationStore.deleteKubeconfig(for: id)
         }
         kubernetesMappings.removeAll { ids.contains($0.clusterID) }
@@ -439,10 +465,28 @@ final class AppStore: ObservableObject {
             alertMessage = conflict.message
             return
         }
-        do {
-            try kubernetesForwardManager.start(mapping: mapping, cluster: cluster)
-        } catch {
-            alertMessage = "启动 Kubernetes 映射失败：\(error.localizedDescription)"
+        Task {
+            do {
+                try await TeleportClient.ensureReady(cluster)
+                try kubernetesForwardManager.start(mapping: mapping, cluster: cluster)
+            } catch {
+                kubernetesForwardManager.markFailed(
+                    mappingID: mapping.id,
+                    message: error.localizedDescription
+                )
+                alertMessage = "启动 Kubernetes 映射失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    func teleportLoginDidSucceed(clusterID: UUID) {
+        restoreEnabledKubernetesMappings(for: clusterID)
+    }
+
+    private func refreshTeleportCredentials() async {
+        for cluster in kubernetesClusters where cluster.configSource == .teleport
+            && !cluster.teleportRequiresMFA {
+            try? await TeleportClient.ensureReady(cluster)
         }
     }
 

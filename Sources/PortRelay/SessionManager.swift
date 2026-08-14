@@ -213,16 +213,23 @@ final class GlobalSessionManager: ObservableObject {
             subtitle: "\(namespace) / \(pod.name)"
         )
         select(session)
-        session.start(
-            executable: "/usr/bin/env",
-            arguments: KubernetesCommandBuilder.logsArguments(
-                cluster: cluster,
-                namespace: namespace,
-                podName: pod.name
-            ),
-            environment: KubectlRunner.kubectlEnvironment,
-            pseudoTerminal: false
-        )
+        Task {
+            do {
+                try await TeleportClient.ensureReady(cluster)
+                session.start(
+                    executable: "/usr/bin/env",
+                    arguments: KubernetesCommandBuilder.logsArguments(
+                        cluster: cluster,
+                        namespace: namespace,
+                        podName: pod.name
+                    ),
+                    environment: KubectlRunner.kubectlEnvironment,
+                    pseudoTerminal: false
+                )
+            } catch {
+                session.fail(error.localizedDescription)
+            }
+        }
     }
 
     func openKubernetesShell(

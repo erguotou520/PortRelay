@@ -71,6 +71,20 @@ enum ConfigurationStore {
         return url.path
     }
 
+    static func prepareTeleportKubeconfig(clusterID: UUID) throws -> String {
+        let directory = applicationDirectory.appendingPathComponent("Kubeconfigs", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let url = directory.appendingPathComponent("\(clusterID.uuidString).yaml")
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        }
+        return url.path
+    }
+
     static func loadKubeconfig(for cluster: KubernetesClusterProfile) -> String {
         guard cluster.configSource == .embedded,
               let data = FileManager.default.contents(atPath: cluster.kubeconfigPath) else { return "" }

@@ -65,6 +65,7 @@ enum KubernetesClient {
     }
 
     static func namespaces(cluster: KubernetesClusterProfile) async throws -> [String] {
+        try await TeleportClient.ensureReady(cluster)
         let data = try await KubectlRunner.run(
             KubernetesCommandBuilder.baseArguments(
                 kubeconfigPath: cluster.kubeconfigPath,
@@ -82,6 +83,7 @@ enum KubernetesClient {
     }
 
     static func ports(cluster: KubernetesClusterProfile, namespace: String) async throws -> [KubernetesPort] {
+        try await TeleportClient.ensureReady(cluster)
         let data = try await KubectlRunner.run(
             KubernetesCommandBuilder.baseArguments(
                 kubeconfigPath: cluster.kubeconfigPath,
@@ -99,6 +101,7 @@ enum KubernetesClient {
         namespace: String,
         deployment: String
     ) async throws -> [KubernetesPod] {
+        try await TeleportClient.ensureReady(cluster)
         let base = KubernetesCommandBuilder.baseArguments(
             kubeconfigPath: cluster.kubeconfigPath,
             contextName: cluster.contextName
@@ -118,6 +121,7 @@ enum KubernetesClient {
         namespace: String,
         podName: String
     ) async throws -> String {
+        try await TeleportClient.ensureReady(cluster)
         for shell in ["/bin/bash", "/bin/sh"] {
             let arguments = KubernetesCommandBuilder.shellArguments(
                 cluster: cluster,
