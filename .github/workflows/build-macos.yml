@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -47,3 +47,16 @@ jobs:
             dist/PortRelay.dmg
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: PortRelay latest
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            dist/PortRelay.dmg
+            dist/PortRelay-macOS.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
