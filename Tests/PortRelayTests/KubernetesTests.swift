@@ -540,6 +540,52 @@ final class KubernetesTests: XCTestCase {
         )
     }
 
+    func testKubectlEnvironmentNeverInheritsHostKubeconfig() {
+        // 应用只信任应用内配置的集群，宿主 shell 的 KUBECONFIG（如 OrbStack）必须被隔离
+        XCTAssertNil(KubectlRunner.kubectlEnvironment["KUBECONFIG"])
+        XCTAssertTrue(KubectlRunner.kubectlEnvironment["PATH"]?.isEmpty == false)
+    }
+
+    func testTeleportEnvironmentPointsAtClusterKubeconfig() {
+        let cluster = KubernetesClusterProfile(
+            id: UUID(),
+            name: "Teleport",
+            configSource: .teleport,
+            kubeconfigPath: "/tmp/PortRelay/Kubeconfigs/cluster-1.yaml",
+            contextName: "portrelay-cluster-1",
+            teleportProxy: "https://teleport.example.com:443/",
+            teleportUsername: "alice"
+        )
+
+        let environment = KubernetesCommandBuilder.environment(for: cluster)
+        XCTAssertEqual(
+            environment["KUBECONFIG"],
+            "/tmp/PortRelay/Kubeconfigs/cluster-1.yaml"
+        )
+        // tsh 的代理地址应规范化（去协议前缀和结尾斜杠）
+        XCTAssertEqual(
+            KubernetesCommandBuilder.baseArguments(cluster: cluster),
+            ["tsh", "--proxy=teleport.example.com:443", "--user=alice", "kubectl"]
+        )
+    }
+
+    func testLocalFileEnvironmentHasNoKubeconfigVariable() {
+        let cluster = KubernetesClusterProfile(
+            id: UUID(),
+            name: "Local",
+            configSource: .localFile,
+            kubeconfigPath: "/tmp/kubeconfig",
+            contextName: "production"
+        )
+
+        XCTAssertNil(KubernetesCommandBuilder.environment(for: cluster)["KUBECONFIG"])
+        // 本地集群靠 --kubeconfig/--context 参数定位集群
+        XCTAssertEqual(
+            KubernetesCommandBuilder.baseArguments(cluster: cluster),
+            ["kubectl", "--kubeconfig", "/tmp/kubeconfig", "--context", "production"]
+        )
+    }
+
     func testStoppedKubernetesMappingDoesNotReserveLocalPort() {
         let stopped = KubernetesPortMapping(
             id: UUID(),

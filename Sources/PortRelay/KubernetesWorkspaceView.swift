@@ -16,11 +16,14 @@ struct KubernetesWorkspaceView: View {
     @State private var deletingClusterIDs = Set<UUID>()
 
     var body: some View {
-        HSplitView {
+        HStack(spacing: 0) {
+            Divider()
             clusterSidebar
                 .frame(minWidth: 230, idealWidth: 250, maxWidth: 330)
+            Divider()
             namespaceSidebar
                 .frame(minWidth: 190, idealWidth: 220, maxWidth: 280)
+            Divider()
             Group {
                 if let cluster = store.selectedKubernetesCluster,
                    let namespace = store.selectedNamespace {
@@ -42,6 +45,7 @@ struct KubernetesWorkspaceView: View {
             }
             .frame(minWidth: 600, maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingAddCluster) {
             KubernetesClusterEditorView(existing: nil).environmentObject(store)
         }

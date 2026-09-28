@@ -27,7 +27,10 @@ enum KubernetesCommandBuilder {
     static func environment(for cluster: KubernetesClusterProfile) -> [String: String] {
         var environment = KubectlRunner.kubectlEnvironment
         if cluster.configSource == .teleport {
-            environment.removeValue(forKey: "KUBECONFIG")
+            // tsh kubectl 未指定 context 时会回落到 ~/.kube/config 的 current-context
+            // （例如 orbstack），导致 “context was not found” 且 stdout 为空。
+            // 显式指向本集群生成的 kubeconfig 可隔离宿主环境。
+            environment["KUBECONFIG"] = (cluster.kubeconfigPath as NSString).expandingTildeInPath
         }
         return environment
     }
@@ -87,7 +90,8 @@ enum KubernetesClient {
         try await TeleportClient.ensureReady(cluster)
         let data = try await KubectlRunner.run(
             KubernetesCommandBuilder.baseArguments(cluster: cluster)
-                + ["get", "namespaces", "--request-timeout=15s", "-o", "json"]
+                + ["get", "namespaces", "--request-timeout=15s", "-o", "json"],
+            environment: KubernetesCommandBuilder.environment(for: cluster)
         )
         return try parseNamespaces(data)
     }
@@ -105,7 +109,8 @@ enum KubernetesClient {
             KubernetesCommandBuilder.baseArguments(cluster: cluster) + [
                 "get", "services,deployments,pods",
                 "--request-timeout=15s", "--namespace", namespace, "-o", "json"
-            ]
+            ],
+            environment: KubernetesCommandBuilder.environment(for: cluster)
         )
         return try parsePorts(data)
     }
@@ -117,18 +122,21 @@ enum KubernetesClient {
     ) async throws -> [KubernetesPod] {
         try await TeleportClient.ensureReady(cluster)
         let base = KubernetesCommandBuilder.baseArguments(cluster: cluster)
+        let environment = KubernetesCommandBuilder.environment(for: cluster)
         let deploymentData = try await KubectlRunner.run(
             base + [
                 "get", "deployment", deployment,
                 "--request-timeout=15s", "--namespace", namespace, "-o", "json"
-            ]
+            ],
+            environment: environment
         )
         let selector = try parseDeploymentSelector(deploymentData)
         let podData = try await KubectlRunner.run(
             base + [
                 "get", "pods", "--selector", selector,
                 "--request-timeout=15s", "--namespace", namespace, "-o", "json"
-            ]
+            ],
+            environment: environment
         )
         return try parsePods(podData)
     }
@@ -139,6 +147,7 @@ enum KubernetesClient {
         podName: String
     ) async throws -> String {
         try await TeleportClient.ensureReady(cluster)
+        let environment = KubernetesCommandBuilder.environment(for: cluster)
         for shell in ["/bin/bash", "/bin/sh"] {
             let arguments = KubernetesCommandBuilder.shellArguments(
                 cluster: cluster,
@@ -147,7 +156,7 @@ enum KubernetesClient {
                 shell: shell,
                 interactive: false
             )
-            if (try? await KubectlRunner.run(arguments)) != nil { return shell }
+            if (try? await KubectlRunner.run(arguments, environment: environment)) != nil { return shell }
         }
         throw ValidationError.message("Pod 中未找到可用的 bash 或 sh")
     }
@@ -265,12 +274,15 @@ enum KubernetesClient {
 }
 
 enum KubectlRunner {
-    static func run(_ arguments: [String]) async throws -> Data {
+    static func run(
+        _ arguments: [String],
+        environment: [String: String]? = nil
+    ) async throws -> Data {
         try await Task.detached(priority: .userInitiated) {
             var failedAttempt = 0
             while true {
                 do {
-                    return try runOnce(arguments)
+                    return try runOnce(arguments, environment: environment)
                 } catch {
                     guard arguments.first == "tsh",
                           failedAttempt < TeleportRetryPolicy.retryDelays.count,
@@ -282,7 +294,10 @@ enum KubectlRunner {
         }.value
     }
 
-    private static func runOnce(_ arguments: [String]) throws -> Data {
+    private static func runOnce(
+        _ arguments: [String],
+        environment: [String: String]?
+    ) throws -> Data {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("PortRelay-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
@@ -302,11 +317,7 @@ enum KubectlRunner {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = arguments
-        var environment = kubectlEnvironment
-        if arguments.first == "tsh" {
-            environment.removeValue(forKey: "KUBECONFIG")
-        }
-        process.environment = environment
+        process.environment = environment ?? kubectlEnvironment
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = outputHandle
         process.standardError = errorHandle
@@ -325,11 +336,23 @@ enum KubectlRunner {
             let message = CommandOutputText.cleaned(String(decoding: error, as: UTF8.self))
             throw ValidationError.message(message.isEmpty ? "kubectl 执行失败" : message)
         }
+        let cleanedOutput = String(decoding: output, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleanedOutput.isEmpty, !error.isEmpty {
+            // tsh 有时在 kubectl 子进程报错（如 context 不存在）时仍以 0 退出，
+            // 若不检查会把空 stdout 当成合法数据交给 JSON 解析。
+            let message = CommandOutputText.cleaned(String(decoding: error, as: UTF8.self))
+            throw ValidationError.message(message.isEmpty ? "kubectl 未返回任何数据" : message)
+        }
         return output
     }
 
     static var kubectlEnvironment: [String: String] {
         var environment = ProcessInfo.processInfo.environment
+        // 本应用只信任应用内配置的集群（--kubeconfig / 显式 KUBECONFIG），
+        // 从不读取用户 shell 的 KUBECONFIG 或 ~/.kube/config，
+        // 避免宿主机环境（如 OrbStack 的 current-context）干扰查询。
+        environment.removeValue(forKey: "KUBECONFIG")
         let commonPaths = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         if let current = environment["PATH"], !current.isEmpty {
             environment["PATH"] = "\(current):\(commonPaths)"
