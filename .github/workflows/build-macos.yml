@@ -60,7 +60,6 @@ jobs:
         with:
           tag_name: latest
           name: PortRelay latest
-          prerelease: true
           generate_release_notes: true
           files: |
             dist/PortRelay.dmg
